@@ -80,30 +80,6 @@ def _resolve_default_db_range(
     return auto_range
 
 
-def compute_fft(runtime: AnalysisRuntime, node: AnalysisNode, params: dict) -> AnalysisResult:
-    channel = runtime.load_channel(node.source_refs["lfp"])
-    _, values = runtime.load_channel_fragment(node.source_refs["lfp"])
-    frequencies = np.fft.rfftfreq(len(values), d=1.0 / channel.sampling_rate_hz)
-    amplitude = np.abs(np.fft.rfft(values - np.nanmean(values)))
-    mask = frequencies <= float(params["max_freq_hz"])
-    frame = pd.DataFrame(
-        {
-            "frequency_hz": frequencies[mask],
-            "power": amplitude[mask],
-            "source_id": node.source_refs["lfp"],
-        }
-    )
-    return AnalysisResult(
-        node_id=node.node_id,
-        title=f"FFT - {node.label}",
-        kind="line",
-        x_label="Frequency (Hz)",
-        y_label="Amplitude",
-        series=[PlotSeries(label=node.label, x=frame["frequency_hz"].to_numpy(), y=frame["power"].to_numpy())],
-        export_table=frame,
-    )
-
-
 def compute_psd(runtime: AnalysisRuntime, node: AnalysisNode, params: dict) -> AnalysisResult:
     channel = runtime.load_channel(node.source_refs["lfp"])
     _, values = runtime.load_channel_fragment(node.source_refs["lfp"])

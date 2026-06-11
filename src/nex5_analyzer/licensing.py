@@ -473,9 +473,6 @@ class LicenseManager:
 
     def _load_license_document_text(self, text: str) -> dict[str, Any]:
         return load_license_document_text(text)
-        if not isinstance(document, dict):
-            raise ValueError("许可证内容不是有效对象。")
-        return document
 
     def validate_license_document(self, document: Mapping[str, Any]) -> LicenseValidationResult:
         try:

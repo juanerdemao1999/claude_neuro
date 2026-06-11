@@ -485,7 +485,7 @@ def _render_phase_raster(axis, result: AnalysisResult) -> None:
     show_wave_overlay = bool(result.meta.get("show_wave_overlay", True))
     wave_overlay_alpha = float(result.meta.get("wave_overlay_alpha", 0.85))
 
-    for unit_order, unit_label in zip(units["unit_order"], units["unit_label"], strict=False):
+    for unit_order in units["unit_order"]:
         subset = frame[frame["unit_order"] == unit_order]
         axis.hlines(
             np.full(len(subset), float(unit_order), dtype=float),
