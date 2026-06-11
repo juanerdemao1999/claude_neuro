@@ -8,7 +8,7 @@ from elephant.waveform_features import waveform_snr
 from scipy.ndimage import gaussian_filter1d
 
 from ..models import AnalysisNode, AnalysisResult, PlotSeries
-from .common import correlogram_result, waveform_width_ms
+from .common import base_spectrogram_kwargs, correlogram_result, waveform_width_ms
 from .runtime import AnalysisRuntime
 
 
@@ -37,18 +37,7 @@ CELL_TYPE_COLOR_MAP = {
 
 
 def _spectrogram_kwargs(sample_rate_hz: float, params: dict, *, nperseg: int, noverlap: int) -> dict[str, object]:
-    kwargs: dict[str, object] = {
-        "fs": sample_rate_hz,
-        "nperseg": nperseg,
-        "noverlap": noverlap,
-    }
-    if "window_function" in params:
-        kwargs["window"] = str(params["window_function"])
-    if "detrend_mode" in params:
-        kwargs["detrend"] = False if str(params["detrend_mode"]) == "none" else str(params["detrend_mode"])
-    if "spectrum_scaling" in params:
-        kwargs["scaling"] = str(params["spectrum_scaling"])
-    return kwargs
+    return base_spectrogram_kwargs(sample_rate_hz, nperseg, noverlap, params)
 
 
 def _welch_kwargs(sample_rate_hz: float, params: dict, *, nperseg: int, noverlap: int) -> dict[str, object]:

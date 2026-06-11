@@ -5,7 +5,7 @@ import pandas as pd
 from scipy import signal
 
 from ..models import AnalysisNode, AnalysisResult, PlotSeries
-from .common import bandpass
+from .common import bandpass, base_spectrogram_kwargs
 from .runtime import AnalysisRuntime
 
 
@@ -14,18 +14,9 @@ SPECTROGRAM_DEFAULT_COLOR_RANGE = (-80.0, -20.0)
 
 
 def _spectrogram_kwargs(sample_rate_hz: float, params: dict) -> dict[str, object]:
-    kwargs: dict[str, object] = {
-        "fs": sample_rate_hz,
-        "nperseg": int(params["nperseg"]),
-        "noverlap": int(params["noverlap"]),
-    }
-    if "window_function" in params:
-        kwargs["window"] = str(params["window_function"])
-    if "detrend_mode" in params:
-        kwargs["detrend"] = False if str(params["detrend_mode"]) == "none" else str(params["detrend_mode"])
-    if "spectrum_scaling" in params:
-        kwargs["scaling"] = str(params["spectrum_scaling"])
-    return kwargs
+    return base_spectrogram_kwargs(
+        sample_rate_hz, int(params["nperseg"]), int(params["noverlap"]), params
+    )
 
 
 def _welch_kwargs(sample_rate_hz: float, params: dict) -> dict[str, object]:

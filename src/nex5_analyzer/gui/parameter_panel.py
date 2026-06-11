@@ -124,16 +124,22 @@ class ParameterPanel(QWidget):
     def _make_widget(self, kind: str, value, minimum, maximum, step, choices: tuple[str, ...] | None) -> QWidget:
         if kind == "int":
             widget = QSpinBox()
-            widget.setRange(int(minimum or -10_000_000), int(maximum or 10_000_000))
-            widget.setSingleStep(int(step or 1))
-            widget.setValue(int(value if value is not None else minimum or 0))
+            widget.setRange(
+                int(minimum if minimum is not None else -10_000_000),
+                int(maximum if maximum is not None else 10_000_000),
+            )
+            widget.setSingleStep(int(step if step is not None else 1))
+            widget.setValue(int(value if value is not None else (minimum if minimum is not None else 0)))
             return widget
         if kind == "float":
             widget = QDoubleSpinBox()
             widget.setDecimals(4)
-            widget.setRange(float(minimum or -10_000_000.0), float(maximum or 10_000_000.0))
-            widget.setSingleStep(float(step or 0.1))
-            widget.setValue(float(value if value is not None else minimum or 0.0))
+            widget.setRange(
+                float(minimum if minimum is not None else -10_000_000.0),
+                float(maximum if maximum is not None else 10_000_000.0),
+            )
+            widget.setSingleStep(float(step if step is not None else 0.1))
+            widget.setValue(float(value if value is not None else (minimum if minimum is not None else 0.0)))
             return widget
         if kind == "bool":
             widget = QCheckBox()
@@ -153,7 +159,7 @@ class ParameterPanel(QWidget):
                 widget.setCurrentIndex(index)
             return widget
         fallback = QDoubleSpinBox()
-        fallback.setValue(float(value if value is not None else minimum or 0.0))
+        fallback.setValue(float(value if value is not None else (minimum if minimum is not None else 0.0)))
         return fallback
 
     def _bind_toggle_dependencies(self, controller_key: str, dependent_keys: tuple[str, ...]) -> None:

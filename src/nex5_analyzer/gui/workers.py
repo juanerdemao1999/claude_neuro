@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import traceback
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QRunnable, Signal
@@ -23,7 +24,7 @@ class AnalysisWorker(QRunnable):
         try:
             result = self.callback(*self.args, **self.kwargs)
         except Exception as exc:  # pragma: no cover - UI error path
-            self.signals.error.emit(self.request_id, str(exc))
+            self.signals.error.emit(self.request_id, f"{exc}\n{traceback.format_exc()}")
             return
         self.signals.result.emit(self.request_id, result)
 
@@ -57,7 +58,7 @@ class TaskWorker(QRunnable):
                 call_kwargs["progress_callback"] = self.signals.progress.emit
             result = self.callback(*self.args, **call_kwargs)
         except Exception as exc:  # pragma: no cover - UI error path
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(f"{exc}\n{traceback.format_exc()}")
             self.signals.finished.emit()
             return
         self.signals.result.emit(result)

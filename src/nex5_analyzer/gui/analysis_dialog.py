@@ -507,9 +507,6 @@ class AnalysisWorkspaceDialog(QDialog):
         return "png"
 
     def _preferred_data_format(self) -> str:
-        normalized = str(self.profile.export_defaults.get("data_format", "csv")).lower().lstrip(".")
-        if normalized == "csv":
-            return normalized
         return "csv"
 
     def _figure_dialog_filter(self) -> str:
@@ -537,14 +534,14 @@ class AnalysisWorkspaceDialog(QDialog):
 
     def _start_export_all(self, output_dir: Path, export_figures: bool, export_data: bool) -> None:
         if not self._has_exportable_nodes():
-            QMessageBox.information(self, "Export Results", "No exportable analysis nodes are available.")
+            QMessageBox.information(self, "导出结果", "当前工作台没有可导出的分析节点。")
             return
         self._export_busy = True
         self._refresh_export_buttons()
         scope_label = self._export_scope_label(export_figures, export_data)
         self.export_progress_bar.setValue(0)
-        self.export_status_view.setPlainText(f"Preparing export for {scope_label}...")
-        self.compute_status_label.setText(f"Status: exporting all {scope_label}")
+        self.export_status_view.setPlainText(f"正在准备导出{scope_label}…")
+        self.compute_status_label.setText(f"状态：正在导出全部{scope_label}")
         set_status_tone(self.compute_status_label, "warn")
 
         worker = TaskWorker(
@@ -587,21 +584,21 @@ class AnalysisWorkspaceDialog(QDialog):
     def _on_export_all_progress(self, update: BatchProgressUpdate) -> None:
         self.export_progress_bar.setValue(update.progress_percent)
         lines = [
-            f"Phase: {self._export_phase_label(update.phase)}",
-            f"Progress: {update.completed_tasks} / {update.total_tasks}" if update.total_tasks else "Progress: preparing",
-            f"Successes: {update.success_count}",
-            f"Failures: {update.failure_count}",
+            f"阶段：{self._export_phase_label(update.phase)}",
+            f"进度：{update.completed_tasks} / {update.total_tasks}" if update.total_tasks else "进度：准备中",
+            f"成功任务：{update.success_count}",
+            f"失败任务：{update.failure_count}",
         ]
         if update.total_chunks:
-            lines.append(f"Batch: {min(update.completed_chunks + 1, update.total_chunks)} / {update.total_chunks}")
+            lines.append(f"批次：{min(update.completed_chunks + 1, update.total_chunks)} / {update.total_chunks}")
         if update.current_file is not None:
-            lines.append(f"File: {update.current_file.name}")
+            lines.append(f"当前文件：{update.current_file.name}")
         if update.current_task:
-            lines.append(f"Current task: {update.current_task}")
+            lines.append(f"当前任务：{update.current_task}")
         if update.eta_seconds is not None:
-            lines.append(f"ETA: {self._format_duration(update.eta_seconds)}")
+            lines.append(f"预计剩余：{self._format_duration(update.eta_seconds)}")
         if update.message:
-            lines.append(f"Details: {update.message}")
+            lines.append(f"详情：{update.message}")
         self.export_status_view.setPlainText("\n".join(lines))
 
     def _on_export_all_success(self, outcome: ExportAllOutcome, export_figures: bool, export_data: bool) -> None:
@@ -611,49 +608,49 @@ class AnalysisWorkspaceDialog(QDialog):
         self.export_status_view.setPlainText(
             "\n".join(
                 [
-                    f"Finished exporting {scope_label}.",
-                    f"Successes: {report.success_count}",
-                    f"Failures: {report.failure_count}",
-                    f"Summary: {report.run_summary_path}",
-                    f"Failures file: {report.failures_path}",
+                    f"已完成全部{scope_label}导出。",
+                    f"成功任务：{report.success_count}",
+                    f"失败任务：{report.failure_count}",
+                    f"汇总清单：{report.run_summary_path}",
+                    f"失败清单：{report.failures_path}",
                 ]
             )
         )
         if report.failure_count == 0:
-            self.compute_status_label.setText(f"Status: finished exporting {scope_label}")
+            self.compute_status_label.setText(f"状态：已导出全部{scope_label}")
             set_status_tone(self.compute_status_label, "ok")
             dialog = QMessageBox.information
         else:
-            self.compute_status_label.setText(f"Status: exporting {scope_label} finished with failures")
+            self.compute_status_label.setText(f"状态：全部{scope_label}导出完成，部分失败")
             set_status_tone(self.compute_status_label, "warn")
             dialog = QMessageBox.warning
 
         dialog(
             self,
-            f"Export {scope_label}",
+            f"导出全部{scope_label}",
             "\n".join(
                 [
-                    f"Finished exporting {scope_label}.",
-                    f"Successes: {report.success_count}",
-                    f"Failures: {report.failure_count}",
-                    f"Summary: {report.run_summary_path}",
-                    f"Failures file: {report.failures_path}",
+                    f"已完成全部{scope_label}导出。",
+                    f"成功任务：{report.success_count}",
+                    f"失败任务：{report.failure_count}",
+                    f"汇总清单：{report.run_summary_path}",
+                    f"失败清单：{report.failures_path}",
                 ]
             ),
         )
 
     def _on_export_all_error(self, message: str) -> None:
-        self.export_status_view.setPlainText(f"Export failed: {message}")
-        self.compute_status_label.setText("Status: export failed")
+        self.export_status_view.setPlainText(f"导出失败：{message}")
+        self.compute_status_label.setText("状态：全量导出失败")
         set_status_tone(self.compute_status_label, "error")
-        QMessageBox.critical(self, "Export Failed", message)
+        QMessageBox.critical(self, "导出失败", message)
 
     @staticmethod
     def _export_phase_label(phase: str) -> str:
         labels = {
-            "starting": "preparing",
-            "processing": "processing",
-            "finished": "finished",
+            "starting": "准备中",
+            "processing": "处理中",
+            "finished": "已完成",
         }
         return labels.get(phase, phase)
 

@@ -273,9 +273,6 @@ class MainWindow(QMainWindow):
             self._refresh_mapping_state()
 
     def _save_profile(self) -> None:
-        self.profile.input_defaults["batch_input_dir"] = self.batch_input_edit.text().strip()
-        self.profile.input_defaults["batch_output_dir"] = self.batch_output_edit.text().strip()
-        self.profile.input_defaults["batch_analysis_keys"] = sorted(self._selected_batch_analysis_keys())
         path, _ = QFileDialog.getSaveFileName(
             self,
             "保存配置",
@@ -284,6 +281,9 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        self.profile.input_defaults["batch_input_dir"] = self.batch_input_edit.text().strip()
+        self.profile.input_defaults["batch_output_dir"] = self.batch_output_edit.text().strip()
+        self.profile.input_defaults["batch_analysis_keys"] = sorted(self._selected_batch_analysis_keys())
         self.profile.save_json(Path(path))
         self.current_profile_path = Path(path)
         self._persist_profile_state()
@@ -360,7 +360,7 @@ class MainWindow(QMainWindow):
             grouped[key]["unit_count"] += 1
             grouped[key]["sources"].append(unit.variable_name)
         rows = list(grouped.values())
-        rows.sort(key=lambda row: (row["channel_id"] is None, row["channel_id"] or 10**9, row["sources"][0]))
+        rows.sort(key=lambda row: (row["channel_id"] is None, row["channel_id"] if row["channel_id"] is not None else 10**9, row["sources"][0]))
         return rows
 
     def _open_region_mapping_dialog(self) -> None:
@@ -604,6 +604,15 @@ class MainWindow(QMainWindow):
             return
         if not any(input_dir.glob("*.nex5")):
             QMessageBox.warning(self, "批量分析", "输入目录中没有找到 .nex5 文件。")
+            return
+        if not output_dir.exists():
+            try:
+                output_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                QMessageBox.warning(self, "批量分析", f"无法创建输出目录：{exc}")
+                return
+        if not output_dir.is_dir():
+            QMessageBox.warning(self, "批量分析", "输出路径不是目录。")
             return
         if not analysis_keys:
             QMessageBox.warning(self, "批量分析", "请至少选择一个批量分析项。")

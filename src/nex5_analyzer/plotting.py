@@ -146,7 +146,8 @@ def _render_line(axis, result: AnalysisResult) -> None:
         if has_confidence_band:
             valid_band = frame["ci_low"].notna() & frame["ci_high"].notna()
             if valid_band.any():
-                mean_frame = frame[frame["series"] == "Mean"].sort_values("x")
+                mean_label = mean_series.label
+                mean_frame = frame[frame["series"] == mean_label].sort_values("x")
                 if not mean_frame.empty:
                     axis.fill_between(
                         mean_frame["x"].to_numpy(dtype=float),
@@ -175,7 +176,7 @@ def _render_line(axis, result: AnalysisResult) -> None:
             mean_series.y,
             color="#2F6B99",
             linewidth=line_width,
-            label="Mean" if show_legend else None,
+            label=mean_series.label if show_legend else None,
         )
 
         if show_legend:

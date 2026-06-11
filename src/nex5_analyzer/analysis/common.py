@@ -8,6 +8,26 @@ from scipy import signal
 from ..models import AnalysisResult, PlotSeries
 
 
+def base_spectrogram_kwargs(
+    sample_rate_hz: float,
+    nperseg: int,
+    noverlap: int,
+    params: dict,
+) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "fs": sample_rate_hz,
+        "nperseg": nperseg,
+        "noverlap": noverlap,
+    }
+    if "window_function" in params:
+        kwargs["window"] = str(params["window_function"])
+    if "detrend_mode" in params:
+        kwargs["detrend"] = False if str(params["detrend_mode"]) == "none" else str(params["detrend_mode"])
+    if "spectrum_scaling" in params:
+        kwargs["scaling"] = str(params["spectrum_scaling"])
+    return kwargs
+
+
 def waveform_width_ms(mean_waveform: np.ndarray, waveform_sample_rate_hz: float | None) -> float:
     if waveform_sample_rate_hz in (None, 0):
         return float("nan")
