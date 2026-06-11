@@ -1,0 +1,52 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+analysis.png
+analysis.svg
+analysis.csv
+session_profile.json
+_tmp_*.png
+
+# Local environments and build outputs
+.buildenv/
+.buildenv_release2/
+.release_build/
+.release_dist/
+build_*/
+dist_*/
+release/
+release_clean/
+
+# Local test/output scratch space
+.codex_test_tmp/
+.spike_sorting_temp/
+.tmp/
+.tmp_pytest/
+pytest_temp*/
+pytest_tmp/
+codex_export_probe/
+codex_export_probe_after_dedup/
+codex_manual_batch_check/
+
+# Large local data and packaged artifacts
+*.nex5
+*.dat
+*.exe
+*.zip
+data/
+s41593-025-01893-7.pdf
+
+# Licensing secrets and generated activation requests
+.secrets/
+license.json
+activation.key
+license_private_key.pem
+machine_request.json
+machine_code.txt
+licenses/

@@ -1,0 +1,5 @@
+.secrets/
+publish/
+licenses/
+__pycache__/
+*.pyc

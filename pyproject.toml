@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nex5-spike-lfp"
+version = "0.1.0"
+description = "Desktop GUI for NEX5 spike and LFP analysis."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "PySide6>=6.9",
+  "pyqtgraph>=0.13",
+  "matplotlib>=3.10",
+  "seaborn>=0.13",
+  "SciencePlots>=2.2",
+  "numpy>=2.2",
+  "scipy>=1.16",
+  "pandas>=2.3",
+  "neo>=0.14",
+  "elephant>=1.2",
+  "nex5file",
+  "cryptography>=44.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+nex5-spike-lfp = "nex5_analyzer.app:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
