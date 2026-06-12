@@ -1539,3 +1539,26 @@ def test_sfc_significance_meta_enables_overlay() -> None:
     figure = Figure()
     axis = figure.add_subplot(111)
     render_publication_axes(axis, result)
+
+
+def test_sfc_significance_line_plots_log_p_not_coherence() -> None:
+    # The SFC-significance export table carries both ``coherence`` and
+    # ``negative_log10_pvalue``. The y-axis label, threshold line and
+    # significance shading are all in -log10(p), so the plotted line must use
+    # -log10(p) rather than coherence to stay self-consistent.
+    from nex5_analyzer.plotting import _line_frame_from_result
+
+    session = make_synthetic_session()
+    profile = SessionProfile.default()
+    root = AnalysisTreeBuilder().build(session, profile)
+    node = root.find_node("spike_lfp:sfc_significance:unit_ch01_u01__ch01")
+
+    result = AnalysisService().compute(session, node, profile, {})
+    table = result.export_table
+    assert {"coherence", "negative_log10_pvalue"}.issubset(table.columns)
+
+    frame = _line_frame_from_result(result)
+    np.testing.assert_allclose(
+        frame["y"].to_numpy(dtype=float),
+        table["negative_log10_pvalue"].to_numpy(dtype=float),
+    )

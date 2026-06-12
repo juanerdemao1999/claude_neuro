@@ -701,10 +701,9 @@ def _line_frame_from_result(result: AnalysisResult) -> pd.DataFrame:
         )
     if {"frequency_hz", "power"}.issubset(result.export_table.columns):
         return pd.DataFrame({"x": result.export_table["frequency_hz"], "y": result.export_table["power"], "series": "Signal"})
-    if {"frequency_hz", "coherence"}.issubset(result.export_table.columns):
-        return pd.DataFrame(
-            {"x": result.export_table["frequency_hz"], "y": result.export_table["coherence"], "series": "Signal"}
-        )
+    # Check -log10(p) before coherence: the SFC-significance table carries both
+    # columns, but its axis, threshold line and significance shading are all in
+    # -log10(p), so the line must match that quantity rather than coherence.
     if {"frequency_hz", "negative_log10_pvalue"}.issubset(result.export_table.columns):
         return pd.DataFrame(
             {
@@ -712,6 +711,10 @@ def _line_frame_from_result(result: AnalysisResult) -> pd.DataFrame:
                 "y": result.export_table["negative_log10_pvalue"],
                 "series": "Signal",
             }
+        )
+    if {"frequency_hz", "coherence"}.issubset(result.export_table.columns):
+        return pd.DataFrame(
+            {"x": result.export_table["frequency_hz"], "y": result.export_table["coherence"], "series": "Signal"}
         )
     if {"time_s", "rate_hz"}.issubset(result.export_table.columns):
         return pd.DataFrame({"x": result.export_table["time_s"], "y": result.export_table["rate_hz"], "series": "Signal"})
