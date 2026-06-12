@@ -55,7 +55,7 @@ class TaskWorker(QRunnable):
         self.args = args
         self.kwargs = kwargs
         self.inject_progress = inject_progress
-        self.cancellation_token = cancellation_token or CancellationToken()
+        self.cancellation_token = cancellation_token
         self.signals = TaskWorkerSignals()
 
     def run(self) -> None:
@@ -63,7 +63,7 @@ class TaskWorker(QRunnable):
             call_kwargs = dict(self.kwargs)
             if self.inject_progress and "progress_callback" not in call_kwargs:
                 call_kwargs["progress_callback"] = self.signals.progress.emit
-            if "cancellation_token" not in call_kwargs:
+            if self.cancellation_token is not None and "cancellation_token" not in call_kwargs:
                 call_kwargs["cancellation_token"] = self.cancellation_token
             result = self.callback(*self.args, **call_kwargs)
         except CancelledError:

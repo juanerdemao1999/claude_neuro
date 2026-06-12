@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import html
 import json
 from pathlib import Path
 
@@ -732,14 +733,14 @@ class MainWindow(QMainWindow):
             html_parts.append('<h4 style="color:#c44e52">失败详情：</h4><table border="0" cellpadding="3">')
             html_parts.append('<tr><th align="left">文件</th><th align="left">分析</th><th align="left">原因</th></tr>')
             for failure in report.failures[:30]:
-                file_name = getattr(getattr(failure, 'session_file', None), 'name', '-') or '-'
-                analysis = getattr(failure, 'analysis_key', '') or "(加载)"
-                error_msg = getattr(failure, 'error_message', '') or ''
+                file_name = failure.session_file.name or "-"
+                analysis = failure.analysis_key or "(加载)"
+                error_msg = failure.error_message or ""
                 # Truncate error message for display
                 error = error_msg[:80] + ("…" if len(error_msg) > 80 else "")
                 html_parts.append(
-                    f'<tr><td>{file_name}</td><td>{analysis}</td>'
-                    f'<td style="color:#c44e52">{error}</td></tr>'
+                    f'<tr><td>{html.escape(file_name)}</td><td>{html.escape(analysis)}</td>'
+                    f'<td style="color:#c44e52">{html.escape(error)}</td></tr>'
                 )
             if len(report.failures) > 30:
                 html_parts.append(f'<tr><td colspan="3">… 还有 {len(report.failures) - 30} 条失败记录</td></tr>')

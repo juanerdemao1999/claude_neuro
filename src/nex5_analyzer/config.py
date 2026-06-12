@@ -38,8 +38,6 @@ class SessionProfile:
     ) -> dict[str, Any]:
         params = default_analysis_defaults().get(analysis_key, {})
         params.update(deepcopy(self.analysis_defaults.get(analysis_key, {})))
-        if node_id is not None and node_id in self.node_overrides:
-            params.update(deepcopy(self.node_overrides[node_id]))
         if runtime_overrides:
             params.update(runtime_overrides)
         return params

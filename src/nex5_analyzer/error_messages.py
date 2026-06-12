@@ -79,6 +79,8 @@ def friendly_error_message(raw_message: str) -> str:
 
     # Extract the actual exception message (last line of traceback or first line)
     lines = raw_message.strip().splitlines()
+    if not lines:
+        return "分析计算出错。\n建议：检查参数设置是否合理，或尝试更换通道/单元组合。"
     # Find the last line that looks like an exception message
     exception_line = lines[0]
     for line in reversed(lines):
