@@ -160,6 +160,7 @@ def compute_pac(runtime: AnalysisRuntime, node: AnalysisNode, params: dict) -> A
         export_table=export,
         meta={
             **peak_meta,
+            **_pac_diagnostics_meta(pac_state, params),
             "vmin": 0.0,
             "vmax": peak_meta["peak_mi"] if peak_meta["peak_mi"] > 0 else None,
         },
@@ -199,7 +200,7 @@ def compute_pac_polar(runtime: AnalysisRuntime, node: AnalysisNode, params: dict
         color_label="Mean Amplitude",
         series=[PlotSeries(label=node.label, x=phase_center_rad, y=mean_amplitudes)],
         export_table=export,
-        meta=peak_meta,
+        meta={**peak_meta, **_pac_diagnostics_meta(pac_state, params)},
     )
 
 
@@ -406,6 +407,7 @@ def _compute_pac_state(values: np.ndarray, sampling_rate_hz: float, params: dict
         "amplitude_lookup": amplitude_lookup,
         "matrix": matrix,
         "peak_indices": peak_indices,
+        "amp_bandwidth_hz": float(params["amp_bandwidth_hz"]),
     }
 
 
@@ -419,6 +421,75 @@ def _pac_peak_meta(pac_state: dict[str, object]) -> dict[str, float]:
         "peak_amp_hz": float(amp_centers[peak_row]),
         "peak_mi": float(matrix[peak_row, peak_col]),
     }
+
+
+def _pac_peak_significance(pac_state: dict[str, object], params: dict) -> dict[str, float]:
+    """Surrogate significance of the peak PAC modulation index.
+
+    The amplitude envelope at the peak amplitude frequency is circularly
+    shifted relative to the phase time series many times; each shift destroys
+    any genuine phase-amplitude coupling while preserving the marginal
+    distributions. The observed peak MI is compared against this null to give a
+    z-score and a permutation p-value (Canolty et al. 2006; Tort et al. 2010).
+    """
+    surrogate_runs = int(params.get("pac_surrogate_runs", 200))
+    peak_row, peak_col = pac_state["peak_indices"]
+    matrix = pac_state["matrix"]
+    observed_mi = float(matrix[peak_row, peak_col])
+    phase_centers = pac_state["phase_centers"]
+    amp_centers = pac_state["amp_centers"]
+    phase_angles = np.asarray(pac_state["phase_lookup"][float(phase_centers[peak_col])], dtype=float)
+    amplitude_envelope = np.asarray(pac_state["amplitude_lookup"][float(amp_centers[peak_row])], dtype=float)
+    phase_edges = pac_state["phase_edges"]
+
+    sample_count = amplitude_envelope.size
+    if surrogate_runs < 1 or sample_count < 4 or observed_mi <= 0.0:
+        return {"peak_mi_z": float("nan"), "peak_mi_p": float("nan")}
+
+    rng = np.random.default_rng(20260327)
+    min_shift = max(1, int(0.05 * sample_count))
+    high = max(min_shift + 1, sample_count - min_shift)
+    surrogate_mi = np.empty(surrogate_runs, dtype=float)
+    for index in range(surrogate_runs):
+        offset = int(rng.integers(min_shift, high))
+        shifted_amplitude = np.roll(amplitude_envelope, offset)
+        surrogate_mi[index] = _tort_modulation_index(phase_angles, shifted_amplitude, phase_edges)
+
+    surrogate_mean = float(np.mean(surrogate_mi))
+    surrogate_std = float(np.std(surrogate_mi, ddof=1)) if surrogate_runs > 1 else 0.0
+    z_score = (observed_mi - surrogate_mean) / surrogate_std if surrogate_std > 0.0 else float("nan")
+    p_value = float((1.0 + int(np.sum(surrogate_mi >= observed_mi))) / float(surrogate_runs + 1))
+    return {"peak_mi_z": float(z_score), "peak_mi_p": p_value}
+
+
+def _pac_bandwidth_meta(pac_state: dict[str, object]) -> dict[str, object]:
+    """Flag amplitude bandwidths too narrow to carry the phase-frequency modulation.
+
+    For the modulation index to reflect genuine coupling, the amplitude
+    band-pass must be wide enough to retain the spectral side-bands located at
+    ``f_amp ± f_phase``; this requires a bandwidth of at least ``2 * f_phase``
+    (Aru et al. 2015; Dvorak & Fenton 2014). Otherwise the side-bands are
+    filtered out and the MI is biased toward zero.
+    """
+    peak_row, peak_col = pac_state["peak_indices"]
+    peak_phase_hz = float(pac_state["phase_centers"][peak_col])
+    amp_bandwidth_hz = float(pac_state.get("amp_bandwidth_hz", 0.0))
+    required_bandwidth_hz = 2.0 * peak_phase_hz
+    if amp_bandwidth_hz > 0.0 and amp_bandwidth_hz < required_bandwidth_hz:
+        return {
+            "pac_bandwidth_warning": (
+                f"Amp bandwidth {amp_bandwidth_hz:.1f} Hz < 2x phase f "
+                f"({required_bandwidth_hz:.1f} Hz); MI may be underestimated"
+            )
+        }
+    return {}
+
+
+def _pac_diagnostics_meta(pac_state: dict[str, object], params: dict) -> dict[str, object]:
+    diagnostics: dict[str, object] = {}
+    diagnostics.update(_pac_peak_significance(pac_state, params))
+    diagnostics.update(_pac_bandwidth_meta(pac_state))
+    return diagnostics
 
 
 def _phase_binned_means(

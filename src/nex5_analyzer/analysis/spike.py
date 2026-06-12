@@ -34,6 +34,49 @@ CELL_TYPE_COLOR_MAP = {
     "Putative inhibitory": "#d62728",
     "Unclassified": "#7f7f7f",
 }
+# Mean silhouette coefficient below which the two-cluster cell-type split is
+# considered poorly separated and flagged as tentative in the figure.
+CLUSTER_SILHOUETTE_THRESHOLD = 0.25
+
+
+def _cluster_silhouette(features: np.ndarray, labels: np.ndarray) -> float:
+    """Mean silhouette coefficient for a hard clustering (Rousseeuw 1987).
+
+    Implemented directly to avoid adding a scikit-learn dependency. Returns NaN
+    when the silhouette is undefined (fewer than two clusters, or fewer than
+    two samples), in which case the caller treats the split as non-separable.
+    """
+    features = np.asarray(features, dtype=float)
+    labels = np.asarray(labels, dtype=int)
+    sample_count = features.shape[0]
+    unique_labels = np.unique(labels)
+    if sample_count < 2 or unique_labels.size < 2:
+        return float("nan")
+
+    distances = np.sqrt(((features[:, None, :] - features[None, :, :]) ** 2).sum(axis=2))
+    silhouette_values = np.zeros(sample_count, dtype=float)
+    for index in range(sample_count):
+        own_label = labels[index]
+        own_members = labels == own_label
+        own_members[index] = False
+        if not np.any(own_members):
+            silhouette_values[index] = 0.0
+            continue
+        intra = float(distances[index, own_members].mean())
+        inter_candidates = []
+        for other_label in unique_labels:
+            if other_label == own_label:
+                continue
+            other_members = labels == other_label
+            if np.any(other_members):
+                inter_candidates.append(float(distances[index, other_members].mean()))
+        if not inter_candidates:
+            silhouette_values[index] = 0.0
+            continue
+        nearest = min(inter_candidates)
+        denominator = max(intra, nearest)
+        silhouette_values[index] = (nearest - intra) / denominator if denominator > 0.0 else 0.0
+    return float(silhouette_values.mean())
 
 
 def _spectrogram_kwargs(sample_rate_hz: float, params: dict, *, nperseg: int, noverlap: int) -> dict[str, object]:
@@ -199,6 +242,12 @@ def _assign_putative_cell_types(frame: pd.DataFrame, *, cluster_seed: int) -> pd
     labels = np.asarray(labels, dtype=int)
     classified.loc[valid_index, "cluster_id"] = labels
 
+    silhouette = _cluster_silhouette(scaled, labels)
+    classified.attrs["cluster_silhouette"] = silhouette
+    classified.attrs["cluster_separable"] = bool(
+        np.isfinite(silhouette) and silhouette >= CLUSTER_SILHOUETTE_THRESHOLD
+    )
+
     cluster_summary = (
         classified.loc[valid_index, ["cluster_id", "half_width_ms", "trough_to_peak_ms", "firing_rate_hz"]]
         .groupby("cluster_id")
@@ -256,6 +305,25 @@ def compute_waveform_characterization(runtime: AnalysisRuntime, node: AnalysisNo
                 }
             )
 
+        silhouette = float(frame.attrs.get("cluster_silhouette", float("nan")))
+        separable = bool(frame.attrs.get("cluster_separable", False))
+        subtitle = f"{len(export_frame)} units grouped into two putative cell-type clusters"
+        meta: dict[str, object] = {
+            "x_feature": x_feature,
+            "y_feature": y_feature,
+            "z_feature": z_feature,
+            "cluster_centroids": centroids,
+        }
+        if np.isfinite(silhouette):
+            meta["cluster_silhouette"] = silhouette
+            subtitle += f" (silhouette = {silhouette:.2f})"
+            if not separable:
+                meta["cluster_separability_warning"] = (
+                    f"Weak cluster separation (silhouette {silhouette:.2f} < {CLUSTER_SILHOUETTE_THRESHOLD:.2f}); "
+                    "cell-type split is tentative"
+                )
+        meta["subtitle"] = subtitle
+
         return AnalysisResult(
             node_id=node.node_id,
             title="Unit Classification Summary",
@@ -265,13 +333,7 @@ def compute_waveform_characterization(runtime: AnalysisRuntime, node: AnalysisNo
             z_label=_summary_feature_label(z_feature),
             color_label="Putative Cell Type",
             export_table=export_frame,
-            meta={
-                "x_feature": x_feature,
-                "y_feature": y_feature,
-                "z_feature": z_feature,
-                "cluster_centroids": centroids,
-                "subtitle": f"{len(export_frame)} units grouped into two putative cell-type clusters",
-            },
+            meta=meta,
         )
 
     spike = runtime.load_spike(node.source_refs["spike"])

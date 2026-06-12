@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from fractions import Fraction
 from itertools import combinations
 
 import numpy as np
@@ -9,6 +10,26 @@ from scipy import signal
 from ..models import AnalysisNode, AnalysisResult, PlotSeries
 from .common import match_lengths
 from .runtime import AnalysisRuntime
+
+
+def _resample_to_rate(values: np.ndarray, source_rate_hz: float, target_rate_hz: float) -> np.ndarray:
+    """Resample a signal to ``target_rate_hz`` when it differs from its source rate.
+
+    ``scipy.signal.coherence`` assumes both inputs share one sampling rate; if
+    two LFP channels were digitised at different rates, simply truncating to a
+    common sample count (as before) misaligns them in time and mislabels the
+    frequency axis. Polyphase resampling onto the lower common rate keeps the
+    two signals time-aligned and the coherence spectrum correct.
+    """
+    values = np.asarray(values, dtype=float)
+    if source_rate_hz <= 0.0 or target_rate_hz <= 0.0 or values.size == 0:
+        return values
+    if np.isclose(source_rate_hz, target_rate_hz):
+        return values
+    ratio = Fraction(target_rate_hz / source_rate_hz).limit_denominator(1000)
+    if ratio.numerator == 0 or ratio.denominator == 0:
+        return values
+    return np.asarray(signal.resample_poly(values, ratio.numerator, ratio.denominator), dtype=float)
 
 
 def _coherence_kwargs(sample_rate_hz: float, params: dict) -> dict[str, object]:
@@ -34,8 +55,11 @@ def _build_pair_coherence_state(
     second = runtime.load_channel(second_variable_name)
     _, a = runtime.load_channel_fragment(first_variable_name)
     _, b = runtime.load_channel_fragment(second_variable_name)
+    common_rate_hz = min(first.sampling_rate_hz, second.sampling_rate_hz)
+    a = _resample_to_rate(a, first.sampling_rate_hz, common_rate_hz)
+    b = _resample_to_rate(b, second.sampling_rate_hz, common_rate_hz)
     a, b = match_lengths(a, b)
-    freq, coh = signal.coherence(a, b, **_coherence_kwargs(min(first.sampling_rate_hz, second.sampling_rate_hz), params))
+    freq, coh = signal.coherence(a, b, **_coherence_kwargs(common_rate_hz, params))
     mask = freq <= float(params["max_freq_hz"])
     return {
         "frequency_hz": freq[mask],

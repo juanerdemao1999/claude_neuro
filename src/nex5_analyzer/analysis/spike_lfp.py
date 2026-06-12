@@ -32,15 +32,27 @@ def compute_sta(runtime: AnalysisRuntime, node: AnalysisNode, params: dict) -> A
 
     lags_ms = np.asarray(state["lags_ms"], dtype=float)
     mean_segment = np.asarray(state["mean_segment"], dtype=float)
-    frame = pd.DataFrame({"lag_ms": lags_ms, "amplitude": mean_segment, "source_id": node.node_id})
+    sem_segment = np.asarray(state.get("sem_segment", np.full_like(mean_segment, np.nan)), dtype=float)
+    spike_count = int(state.get("spike_count", 0))
+    frame = pd.DataFrame(
+        {
+            "lag_ms": lags_ms,
+            "amplitude": mean_segment,
+            "sem": sem_segment,
+            "ci_low": mean_segment - sem_segment,
+            "ci_high": mean_segment + sem_segment,
+            "source_id": node.node_id,
+        }
+    )
     return AnalysisResult(
         node_id=node.node_id,
         title=f"STA - {node.label}",
         kind="line",
         x_label="Lag (ms)",
-        y_label="Amplitude",
+        y_label="Amplitude (mean \u00b1 SEM)",
         series=[PlotSeries(label=node.label, x=lags_ms, y=mean_segment)],
         export_table=frame,
+        meta={"spike_count": spike_count},
     )
 
 
@@ -100,8 +112,10 @@ def compute_sfc_significance(runtime: AnalysisRuntime, node: AnalysisNode, param
                     "color": "#C44E52",
                     "linestyle": "--",
                     "linewidth": 1.4,
+                    "label": f"\u03b1 = {float(state['alpha']):.3g}",
                 }
             ],
+            "significance_overlay": True,
             "peak_frequency_hz": float(state["peak_frequency_hz"]),
             "alpha": float(state["alpha"]),
         },
@@ -135,6 +149,7 @@ def compute_phase_locking(runtime: AnalysisRuntime, node: AnalysisNode, params: 
         series=[PlotSeries(label=node.label, x=state["edges"][:-1], y=state["counts"])],
         export_table=frame,
         meta={
+            "phase_axis": True,
             "mean_phase_rad": state["mean_angle"],
             "plv": state["plv"],
             "ppc": state["ppc"],
@@ -346,7 +361,44 @@ def _build_sta_state(runtime: AnalysisRuntime, node: AnalysisNode, params: dict)
         return {"error_message": "No spikes fell within the valid STA window for the selected fragment."}
 
     lags_ms = np.asarray(result_sta.times.rescale(pq.ms).magnitude, dtype=float)
-    return {"lags_ms": lags_ms, "mean_segment": mean_segment}
+    sem_segment, used_spike_count = _sta_sem(
+        np.asarray(values, dtype=float),
+        np.asarray(times, dtype=float),
+        aligned_spikes,
+        lags_ms / 1000.0,
+    )
+    return {
+        "lags_ms": lags_ms,
+        "mean_segment": mean_segment,
+        "sem_segment": sem_segment,
+        "spike_count": int(used_spike_count),
+    }
+
+
+def _sta_sem(
+    values: np.ndarray,
+    times: np.ndarray,
+    spike_times_s: np.ndarray,
+    lags_s: np.ndarray,
+) -> tuple[np.ndarray, int]:
+    """Per-lag standard error of the mean across spike-triggered segments.
+
+    Segments are sampled by linear interpolation onto the same lag grid that
+    `elephant.spike_triggered_average` reports, so the SEM band stays aligned
+    with the STA mean line. Only spikes whose full window lies inside the
+    fragment contribute, avoiding edge-truncation bias.
+    """
+    if lags_s.size == 0 or times.size == 0:
+        return np.zeros(lags_s.shape, dtype=float), 0
+    inside = (spike_times_s + lags_s[0] >= times[0]) & (spike_times_s + lags_s[-1] <= times[-1])
+    used = np.asarray(spike_times_s[inside], dtype=float)
+    if used.size < 2:
+        return np.full(lags_s.shape, np.nan, dtype=float), int(used.size)
+    segments = np.empty((used.size, lags_s.size), dtype=float)
+    for index, spike_time_s in enumerate(used):
+        segments[index] = np.interp(spike_time_s + lags_s, times, values)
+    sem = segments.std(axis=0, ddof=1) / np.sqrt(used.size)
+    return sem.astype(float), int(used.size)
 
 
 def _shared_sta_state(runtime: AnalysisRuntime, node: AnalysisNode, params: dict) -> dict[str, object]:
