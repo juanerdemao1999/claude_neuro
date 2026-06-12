@@ -319,7 +319,9 @@ def test_license_generator_frozen_root_prefers_parent_private_key(tmp_path: Path
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(exe_dir / "NEX5LicenseGenerator.exe"))
 
-    assert default_signing_root() == tmp_path
+    # default_signing_root() resolves the executable path (which may normalize to
+    # an 8.3 short path on Windows), so compare against the resolved tmp_path.
+    assert default_signing_root() == tmp_path.resolve()
 
 
 def test_license_manager_rejects_expired_license(tmp_path: Path) -> None:

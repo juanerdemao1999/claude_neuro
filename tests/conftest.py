@@ -18,11 +18,15 @@ TMP_COUNTER = itertools.count()
 
 @pytest.fixture(scope="session")
 def sample_nex5_path() -> Path:
+    if not SAMPLE_NEX5.exists():
+        pytest.skip(f"sample data not available: {SAMPLE_NEX5.name}")
     return SAMPLE_NEX5
 
 
 @pytest.fixture(scope="session")
 def lfp_sample_nex5_path() -> Path:
+    if not LFP_SAMPLE_NEX5.exists():
+        pytest.skip(f"sample data not available: {LFP_SAMPLE_NEX5.name}")
     return LFP_SAMPLE_NEX5
 
 
