@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QSpinBox,
     QVBoxLayout,
@@ -18,6 +20,8 @@ from ..defaults import PARAMETER_SPECS
 
 
 class ParameterPanel(QWidget):
+    values_changed = Signal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         outer_layout = QVBoxLayout(self)
@@ -74,7 +78,7 @@ class ParameterPanel(QWidget):
             self.info_label.setText("这个分析在当前版本没有可编辑参数。")
             return
 
-        self.info_label.setText("调整参数后，点击下方按钮应用到这一类分析。")
+        self.info_label.setText("调整参数后，结果会自动更新。也可点击下方按钮应用到这一类分析。")
         for spec in specs:
             widget = self._make_widget(
                 spec.kind,
@@ -85,10 +89,12 @@ class ParameterPanel(QWidget):
                 spec.choices,
             )
             self._widgets[spec.key] = widget
+            self._connect_change_signal(widget)
             self.form_layout.addRow(spec.label, widget)
         self._bind_toggle_dependencies("plot_use_custom_x_range", ("plot_x_min", "plot_x_max"))
         self._bind_toggle_dependencies("plot_use_custom_y_range", ("plot_y_min", "plot_y_max"))
         self._bind_toggle_dependencies("plot_use_custom_color_range", ("plot_color_min", "plot_color_max"))
+        self._add_frequency_presets()
 
     def values(self) -> dict:
         result = {}
@@ -162,6 +168,16 @@ class ParameterPanel(QWidget):
         fallback.setValue(float(value if value is not None else (minimum if minimum is not None else 0.0)))
         return fallback
 
+    def _connect_change_signal(self, widget: QWidget) -> None:
+        if isinstance(widget, QDoubleSpinBox):
+            widget.valueChanged.connect(lambda _: self.values_changed.emit())
+        elif isinstance(widget, QSpinBox):
+            widget.valueChanged.connect(lambda _: self.values_changed.emit())
+        elif isinstance(widget, QCheckBox):
+            widget.toggled.connect(lambda _: self.values_changed.emit())
+        elif isinstance(widget, QComboBox):
+            widget.currentIndexChanged.connect(lambda _: self.values_changed.emit())
+
     def _bind_toggle_dependencies(self, controller_key: str, dependent_keys: tuple[str, ...]) -> None:
         controller = self._widgets.get(controller_key)
         if not isinstance(controller, QCheckBox):
@@ -175,3 +191,41 @@ class ParameterPanel(QWidget):
 
         controller.toggled.connect(sync_state)
         sync_state(controller.isChecked())
+
+    def _add_frequency_presets(self) -> None:
+        """Add frequency band preset buttons when low_hz/high_hz parameters exist."""
+        low_widget = self._widgets.get("low_hz")
+        high_widget = self._widgets.get("high_hz")
+        if not isinstance(low_widget, QDoubleSpinBox) or not isinstance(high_widget, QDoubleSpinBox):
+            return
+
+        presets = [
+            ("Delta", 0.5, 4.0),
+            ("Theta", 4.0, 8.0),
+            ("Alpha", 8.0, 13.0),
+            ("Beta", 13.0, 30.0),
+            ("Low γ", 30.0, 80.0),
+            ("High γ", 80.0, 200.0),
+        ]
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(4)
+        preset_label = QLabel("频段预设：")
+        preset_label.setProperty("role", "caption")
+        preset_row.addWidget(preset_label)
+        for name, low, high in presets:
+            btn = QPushButton(name)
+            btn.setFixedHeight(24)
+            btn.setProperty("variant", "secondary")
+            btn.clicked.connect(self._make_preset_applier(low_widget, high_widget, low, high))
+            preset_row.addWidget(btn)
+        preset_row.addStretch(1)
+        self.form_layout.addRow(preset_row)
+
+    @staticmethod
+    def _make_preset_applier(
+        low_widget: QDoubleSpinBox, high_widget: QDoubleSpinBox, low: float, high: float
+    ):
+        def apply_preset() -> None:
+            low_widget.setValue(low)
+            high_widget.setValue(high)
+        return apply_preset

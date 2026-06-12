@@ -11,6 +11,7 @@ from typing import Any, Callable
 from ..config import SessionProfile
 from ..export_naming import build_analysis_output_stem
 from ..exporters import export_result_data, export_result_figure
+from ..cancellation import CancellationToken, CancelledError
 from ..io.nex5_loader import Nex5SessionLoader
 from ..models import AnalysisNode, AnalysisResult, SessionData, normalize_region_assignment
 from .service import AnalysisService
@@ -138,6 +139,7 @@ class BatchAnalysisRunner:
         session: SessionData,
         leaf_nodes: list[AnalysisNode],
         analysis_keys: set[str] | None = None,
+        filename_template: str | None = None,
     ) -> list[BatchAnalysisTask]:
         tasks: list[BatchAnalysisTask] = []
         for node in leaf_nodes:
@@ -150,7 +152,7 @@ class BatchAnalysisRunner:
                     session_file=session.file_path,
                     node_id=node.node_id,
                     analysis_key=node.analysis_key,
-                    output_stem=build_analysis_output_stem(session, node),
+                    output_stem=build_analysis_output_stem(session, node, template=filename_template),
                 )
             )
         return tasks
@@ -173,6 +175,7 @@ class BatchAnalysisRunner:
         export_data: bool = True,
         progress_callback: Callable[[BatchProgressUpdate], None] | None = None,
         chunk_size: int = 24,
+        cancellation_token: CancellationToken | None = None,
     ) -> BatchRunReport:
         if not export_figures and not export_data:
             raise ValueError("At least one export target must be enabled.")
@@ -187,7 +190,8 @@ class BatchAnalysisRunner:
         root = AnalysisTreeBuilder().build(session, profile)
         leaf_nodes = list(_iter_leaf_nodes(root))
         node_lookup = {node.node_id: node for node in leaf_nodes}
-        tasks = self._build_tasks_for_leaf_nodes(session, leaf_nodes, analysis_keys)
+        filename_template = profile.export_defaults.get("filename_template") or None
+        tasks = self._build_tasks_for_leaf_nodes(session, leaf_nodes, analysis_keys, filename_template=filename_template)
         chunk_size = max(1, int(chunk_size))
         total_tasks = len(tasks)
         total_chunks = math.ceil(total_tasks / chunk_size) if total_tasks else 0
@@ -244,6 +248,8 @@ class BatchAnalysisRunner:
             return report
 
         for task in tasks:
+            if cancellation_token is not None:
+                cancellation_token.check()
             current_chunk = (completed_tasks // chunk_size) + 1
             chunk_start = ((current_chunk - 1) * chunk_size) + 1
             chunk_end = min(total_tasks, current_chunk * chunk_size)
@@ -346,6 +352,7 @@ class BatchAnalysisRunner:
         analysis_keys: set[str] | None = None,
         reference_channel_ids: list[int] | None = None,
         progress_callback: Callable[[BatchProgressUpdate], None] | None = None,
+        cancellation_token: CancellationToken | None = None,
     ) -> BatchRunReport:
         input_dir = Path(input_dir)
         output_dir = Path(output_dir)
@@ -367,6 +374,8 @@ class BatchAnalysisRunner:
         )
 
         for index, file_path in enumerate(files, start=1):
+            if cancellation_token is not None:
+                cancellation_token.check()
             _emit_progress(
                 progress_callback,
                 BatchProgressUpdate(
@@ -439,7 +448,8 @@ class BatchAnalysisRunner:
             root = AnalysisTreeBuilder().build(session, profile)
             leaf_nodes = list(_iter_leaf_nodes(root))
             node_lookup = {node.node_id: node for node in leaf_nodes}
-            tasks = self._build_tasks_for_leaf_nodes(session, leaf_nodes, analysis_keys)
+            filename_template = profile.export_defaults.get("filename_template") or None
+            tasks = self._build_tasks_for_leaf_nodes(session, leaf_nodes, analysis_keys, filename_template=filename_template)
             if not tasks:
                 report.failures.append(
                     BatchTaskFailure(

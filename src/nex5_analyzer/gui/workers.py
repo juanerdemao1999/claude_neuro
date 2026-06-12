@@ -5,6 +5,10 @@ from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QRunnable, Signal
 
+from ..cancellation import CancellationToken, CancelledError
+
+__all__ = ["CancellationToken", "CancelledError", "AnalysisWorker", "TaskWorker"]
+
 
 class WorkerSignals(QObject):
     result = Signal(int, object)
@@ -33,6 +37,7 @@ class TaskWorkerSignals(QObject):
     result = Signal(object)
     error = Signal(str)
     progress = Signal(object)
+    cancelled = Signal()
     finished = Signal()
 
 
@@ -42,6 +47,7 @@ class TaskWorker(QRunnable):
         callback: Callable[..., Any],
         *args: Any,
         inject_progress: bool = False,
+        cancellation_token: CancellationToken | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -49,6 +55,7 @@ class TaskWorker(QRunnable):
         self.args = args
         self.kwargs = kwargs
         self.inject_progress = inject_progress
+        self.cancellation_token = cancellation_token or CancellationToken()
         self.signals = TaskWorkerSignals()
 
     def run(self) -> None:
@@ -56,7 +63,13 @@ class TaskWorker(QRunnable):
             call_kwargs = dict(self.kwargs)
             if self.inject_progress and "progress_callback" not in call_kwargs:
                 call_kwargs["progress_callback"] = self.signals.progress.emit
+            if "cancellation_token" not in call_kwargs:
+                call_kwargs["cancellation_token"] = self.cancellation_token
             result = self.callback(*self.args, **call_kwargs)
+        except CancelledError:
+            self.signals.cancelled.emit()
+            self.signals.finished.emit()
+            return
         except Exception as exc:  # pragma: no cover - UI error path
             self.signals.error.emit(f"{exc}\n{traceback.format_exc()}")
             self.signals.finished.emit()

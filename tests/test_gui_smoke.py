@@ -301,11 +301,12 @@ def test_analysis_workspace_start_export_all_enables_progress_injection(monkeypa
             self.error = DummySignal()
             self.finished = DummySignal()
             self.progress = DummySignal()
+            self.cancelled = DummySignal()
 
     recorded: dict[str, object] = {}
 
     class FakeTaskWorker:
-        def __init__(self, callback, *args, inject_progress=False, **kwargs) -> None:
+        def __init__(self, callback, *args, inject_progress=False, cancellation_token=None, **kwargs) -> None:
             recorded["callback"] = callback
             recorded["inject_progress"] = inject_progress
             recorded["args"] = args
@@ -349,6 +350,7 @@ def test_analysis_workspace_execute_export_all_forwards_progress_callback(monkey
             export_data=True,
             progress_callback=None,
             chunk_size=0,
+            cancellation_token=None,
         ):
             captured["session"] = session
             captured["output_dir"] = output_dir
@@ -500,6 +502,7 @@ def test_main_window_execute_batch_analysis_uses_current_profile(tmp_path: Path,
         analysis_keys=None,
         reference_channel_ids=None,
         progress_callback=None,
+        cancellation_token=None,
     ):
         captured["input"] = batch_input
         captured["output"] = batch_output

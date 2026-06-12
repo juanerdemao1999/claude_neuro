@@ -723,12 +723,18 @@ def _annotate_meta(axis, result: AnalysisResult) -> None:
         else:
             lines.append(f"{key}: {value}")
     if bool(result.meta.get("low_spike_warning")):
-        lines.append("low spike count")
+        lines.append("⚠ low spike count")
+    # Adaptive font size to prevent overflow when many metrics are present
+    num_lines = len(lines)
+    if result.kind == "polar":
+        fontsize = 7.5 if num_lines > 5 else (8.0 if num_lines > 3 else 9.0)
+    else:
+        fontsize = 7.5 if num_lines > 6 else 8.5
     annotation = "\n".join(lines)
     if result.kind == "polar" or len(_content_axes(axis.figure)) <= 1:
-        artist = axis.set_title(annotation, loc="right", fontsize=9, pad=10)
+        artist = axis.set_title(annotation, loc="right", fontsize=fontsize, pad=8)
         artist.set_multialignment("left")
-        artist.set_bbox({"boxstyle": "round", "facecolor": "white", "alpha": 0.92, "edgecolor": "0.7"})
+        artist.set_bbox({"boxstyle": "round,pad=0.3", "facecolor": "white", "alpha": 0.92, "edgecolor": "0.7"})
     else:
         artist = axis.text(
             0.98,
@@ -737,9 +743,9 @@ def _annotate_meta(axis, result: AnalysisResult) -> None:
             transform=axis.transAxes,
             ha="right",
             va="top",
-            fontsize=8.5,
-            clip_on=False,
-            bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.9, "edgecolor": "0.7"},
+            fontsize=fontsize,
+            clip_on=True,
+            bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "alpha": 0.9, "edgecolor": "0.7"},
         )
     artist.set_gid(METRICS_BOX_GID)
     artist.set_in_layout(True)
