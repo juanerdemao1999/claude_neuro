@@ -223,7 +223,6 @@ def _assign_putative_cell_types(frame: pd.DataFrame, *, cluster_seed: int) -> pd
 
 
 def compute_waveform_characterization(runtime: AnalysisRuntime, node: AnalysisNode, params: dict) -> AnalysisResult:
-    session = runtime.session
     if "spike" not in node.source_refs:
         frame = _build_waveform_summary_frame(runtime, params)
         if frame.empty:

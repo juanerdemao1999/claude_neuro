@@ -224,7 +224,6 @@ def compute_population_coding(runtime: AnalysisRuntime, node: AnalysisNode, para
     analytic = signal.hilbert(filtered)
     wrapped_phase_rad = np.mod(np.angle(analytic), 2.0 * np.pi)
     unwrapped_phase_rad = np.unwrap(np.angle(analytic))
-    cycle_indices = np.floor((unwrapped_phase_rad - unwrapped_phase_rad[0]) / (2.0 * np.pi)).astype(int)
     lfp_channel = runtime.session.get_lfp_channel(node.source_refs["lfp"])
 
     candidate_units = list(runtime.session.spike_units)

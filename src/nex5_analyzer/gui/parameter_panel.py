@@ -55,10 +55,8 @@ class ParameterPanel(QWidget):
         self.scroll.setWidget(self.form_host)
 
         self._widgets: dict[str, QWidget] = {}
-        self._analysis_key: str | None = None
 
     def set_analysis(self, analysis_key: str | None, values: dict) -> None:
-        self._analysis_key = analysis_key
         while self.form_layout.rowCount():
             self.form_layout.removeRow(0)
         self._widgets.clear()

@@ -281,24 +281,9 @@ class SessionData:
             updated_units.append(replace(unit, region=region, subject=subject))
         return replace(self, lfp_channels=updated_lfp, spike_units=updated_units, region_map=normalized_map)
 
-    def with_manual_channel_ids(self, overrides: dict[str, int]) -> "SessionData":
-        merged = dict(self.manual_channel_ids)
-        merged.update(overrides)
-        if self.data_store is None:
-            return replace(self, manual_channel_ids=merged)
-        return self.data_store.reload_session(manual_channel_ids=merged, region_map=self.region_map)
-
     @property
     def file_name(self) -> str:
         return self.file_path.name
-
-    @property
-    def has_lfp(self) -> bool:
-        return bool(self.lfp_channels)
-
-    @property
-    def has_spikes(self) -> bool:
-        return bool(self.spike_units)
 
     @property
     def channel_ids(self) -> list[int]:
