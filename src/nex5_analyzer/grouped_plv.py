@@ -211,6 +211,7 @@ class GroupedPLVRunner:
                         "lfp_variable": channel.variable_name,
                         "spike_count": int(metrics["spike_count"]),
                         "plv": float(metrics["plv"]),
+                        "ppc": float(metrics["ppc"]),
                         "preferred_phase_rad": float(metrics["mean_angle"]),
                         "preferred_phase_deg": float(np.degrees(metrics["mean_angle"])),
                         "rayleigh_z": float(metrics["rayleigh_z"]),

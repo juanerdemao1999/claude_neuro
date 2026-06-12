@@ -350,8 +350,8 @@ def compute_waveform_characterization(runtime: AnalysisRuntime, node: AnalysisNo
             "snr": _safe_waveform_snr(spike.waveforms),
             "n_waveforms": n_waveforms,
             "n_displayed": len(display_waveforms),
-            "show_legend": bool(params.get("waveform_show_legend", True)),
-            "line_width": float(params.get("waveform_line_width", 2.2)),
+            "show_legend": bool(params.get("plot_show_legend", True)),
+            "line_width": float(params.get("plot_line_width", 2.2)),
             "individual_alpha": float(params.get("waveform_individual_alpha", 0.15)),
         },
     )

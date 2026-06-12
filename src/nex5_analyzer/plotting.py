@@ -694,7 +694,19 @@ def _annotate_meta(axis, result: AnalysisResult) -> None:
         return
     keys = [
         key
-        for key in ("width_ms", "snr", "plv", "mean_phase_rad", "peak_phase_hz", "peak_amp_hz", "peak_mi")
+        for key in (
+            "width_ms",
+            "snr",
+            "plv",
+            "ppc",
+            "kappa",
+            "rayleigh_p",
+            "spike_count",
+            "mean_phase_rad",
+            "peak_phase_hz",
+            "peak_amp_hz",
+            "peak_mi",
+        )
         if key in result.meta
     ]
     if not keys:
@@ -702,10 +714,16 @@ def _annotate_meta(axis, result: AnalysisResult) -> None:
     lines = []
     for key in keys:
         value = result.meta[key]
-        if isinstance(value, float):
+        if key == "rayleigh_p":
+            lines.append(f"{key}: {float(value):.3g}")
+        elif key == "spike_count":
+            lines.append(f"{key}: {int(value)}")
+        elif isinstance(value, float):
             lines.append(f"{key}: {value:.3f}")
         else:
             lines.append(f"{key}: {value}")
+    if bool(result.meta.get("low_spike_warning")):
+        lines.append("low spike count")
     annotation = "\n".join(lines)
     if result.kind == "polar" or len(_content_axes(axis.figure)) <= 1:
         artist = axis.set_title(annotation, loc="right", fontsize=9, pad=10)

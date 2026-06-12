@@ -44,6 +44,15 @@ def _build_pair_coherence_state(
     }
 
 
+def _band_mean_coherence(state: dict[str, object], low_hz: float, high_hz: float) -> float:
+    freq = np.asarray(state["frequency_hz"], dtype=float)
+    coherence = np.asarray(state["coherence"], dtype=float)
+    band_mask = (freq >= low_hz) & (freq <= high_hz)
+    if not np.any(band_mask):
+        return float("nan")
+    return float(np.nanmean(coherence[band_mask]))
+
+
 def _shared_pair_coherence_state(
     runtime: AnalysisRuntime,
     first_variable_name: str,
@@ -97,11 +106,13 @@ def compute_region_summary(runtime: AnalysisRuntime, node: AnalysisNode, params:
             message="Need at least two mapped LFP channels to build a region summary.",
         )
 
+    low_hz = float(params.get("low_hz", 0.0))
+    high_hz = float(params.get("high_hz", params["max_freq_hz"]))
     region_values: dict[tuple[str, str], list[float]] = {}
     for first, second in combinations(mapped_channels, 2):
         state = _shared_pair_coherence_state(runtime, first.variable_name, second.variable_name, params)
         key = tuple(sorted((first.region_label, second.region_label)))
-        region_values.setdefault(key, []).append(float(state["mean_coherence"]))
+        region_values.setdefault(key, []).append(_band_mean_coherence(state, low_hz, high_hz))
 
     regions = sorted({region for pair in region_values for region in pair})
     matrix = pd.DataFrame(np.nan, index=regions, columns=regions, dtype=float)
