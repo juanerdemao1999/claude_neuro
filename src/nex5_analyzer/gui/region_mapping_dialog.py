@@ -280,8 +280,8 @@ class ChannelRegionMappingDialog(QDialog):
 
     def _remove_selected_rows(self) -> None:
         selected_rows = sorted({index.row() for index in self.table.selectedIndexes()}, reverse=True)
-        if not selected_rows and self.table.rowCount() > 0:
-            selected_rows = [self.table.rowCount() - 1]
+        if not selected_rows:
+            return
         self.table.blockSignals(True)
         for row_index in selected_rows:
             self.table.removeRow(row_index)

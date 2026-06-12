@@ -8,7 +8,7 @@ from elephant.waveform_features import waveform_snr
 from scipy.ndimage import gaussian_filter1d
 
 from ..models import AnalysisNode, AnalysisResult, PlotSeries
-from .common import correlogram_result, waveform_width_ms
+from .common import base_spectrogram_kwargs, correlogram_result, waveform_width_ms
 from .runtime import AnalysisRuntime
 
 
@@ -37,18 +37,7 @@ CELL_TYPE_COLOR_MAP = {
 
 
 def _spectrogram_kwargs(sample_rate_hz: float, params: dict, *, nperseg: int, noverlap: int) -> dict[str, object]:
-    kwargs: dict[str, object] = {
-        "fs": sample_rate_hz,
-        "nperseg": nperseg,
-        "noverlap": noverlap,
-    }
-    if "window_function" in params:
-        kwargs["window"] = str(params["window_function"])
-    if "detrend_mode" in params:
-        kwargs["detrend"] = False if str(params["detrend_mode"]) == "none" else str(params["detrend_mode"])
-    if "spectrum_scaling" in params:
-        kwargs["scaling"] = str(params["spectrum_scaling"])
-    return kwargs
+    return base_spectrogram_kwargs(sample_rate_hz, nperseg, noverlap, params)
 
 
 def _welch_kwargs(sample_rate_hz: float, params: dict, *, nperseg: int, noverlap: int) -> dict[str, object]:
@@ -234,7 +223,6 @@ def _assign_putative_cell_types(frame: pd.DataFrame, *, cluster_seed: int) -> pd
 
 
 def compute_waveform_characterization(runtime: AnalysisRuntime, node: AnalysisNode, params: dict) -> AnalysisResult:
-    session = runtime.session
     if "spike" not in node.source_refs:
         frame = _build_waveform_summary_frame(runtime, params)
         if frame.empty:
@@ -361,8 +349,8 @@ def compute_waveform_characterization(runtime: AnalysisRuntime, node: AnalysisNo
             "snr": _safe_waveform_snr(spike.waveforms),
             "n_waveforms": n_waveforms,
             "n_displayed": len(display_waveforms),
-            "show_legend": bool(params.get("waveform_show_legend", True)),
-            "line_width": float(params.get("waveform_line_width", 2.2)),
+            "show_legend": bool(params.get("plot_show_legend", True)),
+            "line_width": float(params.get("plot_line_width", 2.2)),
             "individual_alpha": float(params.get("waveform_individual_alpha", 0.15)),
         },
     )

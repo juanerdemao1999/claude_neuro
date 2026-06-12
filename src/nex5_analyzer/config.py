@@ -50,12 +50,6 @@ class SessionProfile:
         self.analysis_defaults[analysis_key] = deepcopy(defaults.get(analysis_key, {}))
         return deepcopy(self.analysis_defaults[analysis_key])
 
-    def set_node_override(self, node_id: str, params: dict[str, Any]) -> None:
-        self.node_overrides[node_id] = deepcopy(params)
-
-    def clear_node_override(self, node_id: str) -> None:
-        self.node_overrides.pop(node_id, None)
-
     def clone(self) -> "SessionProfile":
         return self.from_dict(self.to_dict())
 

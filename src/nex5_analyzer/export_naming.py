@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 from .models import AnalysisNode, LFPChannel, SessionData, SpikeUnit
+
+# Default naming template; users can override via profile.export_defaults["filename_template"]
+DEFAULT_FILENAME_TEMPLATE = "{scope}_{analysis}_{source}"
 
 
 def slugify_export_token(value: str) -> str:
@@ -11,11 +15,56 @@ def slugify_export_token(value: str) -> str:
     return normalized
 
 
-def build_analysis_output_stem(session: SessionData, node: AnalysisNode) -> str:
+def build_analysis_output_stem(
+    session: SessionData,
+    node: AnalysisNode,
+    template: str | None = None,
+) -> str:
     scope = slugify_export_token(node.node_id.split(":", 1)[0]) or "analysis"
     analysis_key = slugify_export_token(node.analysis_key or "analysis") or "analysis"
     source_stem = _source_stem_for_node(session, node)
+
+    if template:
+        return _apply_template(template, session, node, scope, analysis_key, source_stem)
+
     return "_".join(part for part in [scope, analysis_key, source_stem] if part)
+
+
+def _apply_template(
+    template: str,
+    session: SessionData,
+    node: AnalysisNode,
+    scope: str,
+    analysis_key: str,
+    source_stem: str,
+) -> str:
+    """Apply user-defined filename template with placeholder substitution.
+
+    Falls back to the default naming scheme if the template contains unknown
+    placeholders or malformed braces.
+    """
+    file_stem = slugify_export_token(session.file_path.stem) if session.file_path else "unknown"
+    now = datetime.now()
+    subject = slugify_export_token("_".join(session.subject_names[:2])) if session.subject_names else ""
+
+    default_stem = "_".join(part for part in [scope, analysis_key, source_stem] if part)
+    try:
+        result = template.format(
+            file=file_stem,
+            scope=scope,
+            analysis=analysis_key,
+            source=source_stem,
+            date=now.strftime("%Y%m%d"),
+            time=now.strftime("%H%M%S"),
+            subject=subject,
+            node=slugify_export_token(node.label or node.node_id),
+        )
+    except (KeyError, IndexError, ValueError):
+        return default_stem
+    # Clean up multiple underscores and leading/trailing separators
+    result = re.sub(r"[_]{2,}", "_", result)
+    result = result.strip("_.")
+    return result or default_stem
 
 
 def _source_stem_for_node(session: SessionData, node: AnalysisNode) -> str:

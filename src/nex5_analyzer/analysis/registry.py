@@ -198,6 +198,19 @@ SPECTROGRAM_WINDOW_PARAMETER_SPECS = (
     ParameterSpec("spectrum_scaling", "Scaling", "choice", choices=SPECTRUM_SCALING_CHOICES),
 )
 
+# Magnitude-squared coherence is normalised, so the `spectrum_scaling`
+# (density vs spectrum) choice has no effect on it. Coherence analyses use this
+# reduced window control set instead of the full spectrogram one to avoid
+# exposing a parameter that is silently ignored.
+COHERENCE_WINDOW_DEFAULTS = {
+    "window_function": "hann",
+    "detrend_mode": "constant",
+}
+COHERENCE_WINDOW_PARAMETER_SPECS = (
+    ParameterSpec("window_function", "Window Function", "choice", choices=WINDOW_FUNCTION_CHOICES),
+    ParameterSpec("detrend_mode", "Detrend", "choice", choices=DETREND_CHOICES),
+)
+
 WELCH_STYLE_DEFAULTS = {
     **SPECTROGRAM_WINDOW_DEFAULTS,
     "welch_average": "mean",
@@ -235,7 +248,11 @@ PAC_DEFAULT_PARAMS = {
     "amp_min_hz": 30.0,
     "amp_max_hz": 120.0,
     "amp_step_hz": 10.0,
-    "amp_bandwidth_hz": 20.0,
+    # The amplitude filter bandwidth must be at least twice the highest phase
+    # frequency so that the modulation side-bands are preserved (Aru et al.
+    # 2015, Curr. Opin. Neurobiol. 31:51; Dvorak & Fenton 2014). With a phase
+    # band up to 12 Hz the previous 20 Hz default was too narrow.
+    "amp_bandwidth_hz": 30.0,
     "phase_bins": 18,
     "filter_order": 4,
 }
@@ -266,7 +283,7 @@ SFC_SIGNIFICANCE_DEFAULT_PARAMS = {
     "max_freq_hz": 120.0,
     "nperseg": 1024,
     "noverlap": 768,
-    "surrogate_runs": 64,
+    "surrogate_runs": 200,
     "alpha": 0.05,
     "min_shift_s": 0.5,
 }
@@ -275,7 +292,7 @@ SFC_SIGNIFICANCE_PARAMETER_SPECS = (
     ParameterSpec("max_freq_hz", "Max Freq (Hz)", "float", 1.0, 1000.0, 1.0),
     ParameterSpec("nperseg", "Window", "int", 64, 65536, 1),
     ParameterSpec("noverlap", "Overlap", "int", 0, 65535, 1),
-    ParameterSpec("surrogate_runs", "Surrogates", "int", 8, 512, 1),
+    ParameterSpec("surrogate_runs", "Surrogates", "int", 8, 2000, 1),
     ParameterSpec("alpha", "Alpha", "float", 0.001, 0.5, 0.001),
     ParameterSpec("min_shift_s", "Min Shift (s)", "float", 0.01, 120.0, 0.01),
 )
@@ -289,7 +306,7 @@ COHERENCE_REPORT_DEFAULT_PARAMS = {
     "high_hz": 12.0,
     "phase_bins": 18,
     "filter_order": 4,
-    "surrogate_runs": 64,
+    "surrogate_runs": 200,
     "alpha": 0.05,
     "min_shift_s": 0.5,
 }
@@ -303,7 +320,7 @@ COHERENCE_REPORT_PARAMETER_SPECS = (
     ParameterSpec("high_hz", "High (Hz)", "float", 0.1, 500.0, 0.1),
     ParameterSpec("phase_bins", "Bins", "int", 6, 72, 1),
     ParameterSpec("filter_order", "Order", "int", 1, 12, 1),
-    ParameterSpec("surrogate_runs", "Surrogates", "int", 8, 512, 1),
+    ParameterSpec("surrogate_runs", "Surrogates", "int", 8, 2000, 1),
     ParameterSpec("alpha", "Alpha", "float", 0.001, 0.5, 0.001),
     ParameterSpec("min_shift_s", "Min Shift (s)", "float", 0.01, 120.0, 0.01),
 )
@@ -434,8 +451,6 @@ ANALYSIS_DEFINITIONS: tuple[AnalysisDefinition, ...] = (
             ANNOTATION_STYLE_DEFAULTS,
             {
                 "waveform_max_display": 0,
-                "waveform_show_legend": True,
-                "waveform_line_width": 2.2,
                 "waveform_individual_alpha": 0.15,
             },
         ),
@@ -446,8 +461,6 @@ ANALYSIS_DEFINITIONS: tuple[AnalysisDefinition, ...] = (
             ANNOTATION_STYLE_PARAMETER_SPECS,
             (
                 ParameterSpec("waveform_max_display", "Max Waveforms Display", "int", 0, 500, 1),
-                ParameterSpec("waveform_show_legend", "Show Legend", "bool"),
-                ParameterSpec("waveform_line_width", "Line Width", "float", 0.2, 20.0, 0.1),
                 ParameterSpec("waveform_individual_alpha", "Individual Alpha", "float", 0.0, 1.0, 0.05),
             ),
         ),
@@ -565,7 +578,7 @@ ANALYSIS_DEFINITIONS: tuple[AnalysisDefinition, ...] = (
         build_mode="lfp_pair",
         default_params=_merge_defaults(
             {"max_freq_hz": 120.0, "nperseg": 1024, "noverlap": 768},
-            SPECTROGRAM_WINDOW_DEFAULTS,
+            COHERENCE_WINDOW_DEFAULTS,
             LINE_STYLE_DEFAULTS,
             ANNOTATION_STYLE_DEFAULTS,
         ),
@@ -575,7 +588,7 @@ ANALYSIS_DEFINITIONS: tuple[AnalysisDefinition, ...] = (
                 ParameterSpec("nperseg", "Window", "int", 64, 65536, 1),
                 ParameterSpec("noverlap", "Overlap", "int", 0, 65535, 1),
             ),
-            SPECTROGRAM_WINDOW_PARAMETER_SPECS,
+            COHERENCE_WINDOW_PARAMETER_SPECS,
             LINE_STYLE_PARAMETER_SPECS,
             ANNOTATION_STYLE_PARAMETER_SPECS,
         ),
@@ -587,8 +600,8 @@ ANALYSIS_DEFINITIONS: tuple[AnalysisDefinition, ...] = (
         scope="lfp_lfp",
         build_mode="session_single",
         default_params=_merge_defaults(
-            {"max_freq_hz": 120.0, "nperseg": 1024, "noverlap": 768},
-            SPECTROGRAM_WINDOW_DEFAULTS,
+            {"max_freq_hz": 120.0, "nperseg": 1024, "noverlap": 768, "low_hz": 0.0, "high_hz": 120.0},
+            COHERENCE_WINDOW_DEFAULTS,
             HEATMAP_STYLE_DEFAULTS,
             ANNOTATION_STYLE_DEFAULTS,
         ),
@@ -597,8 +610,10 @@ ANALYSIS_DEFINITIONS: tuple[AnalysisDefinition, ...] = (
                 ParameterSpec("max_freq_hz", "Max Freq (Hz)", "float", 1.0, 1000.0, 1.0),
                 ParameterSpec("nperseg", "Window", "int", 64, 65536, 1),
                 ParameterSpec("noverlap", "Overlap", "int", 0, 65535, 1),
+                ParameterSpec("low_hz", "Mean Band Low (Hz)", "float", 0.0, 1000.0, 0.1),
+                ParameterSpec("high_hz", "Mean Band High (Hz)", "float", 0.1, 1000.0, 0.1),
             ),
-            SPECTROGRAM_WINDOW_PARAMETER_SPECS,
+            COHERENCE_WINDOW_PARAMETER_SPECS,
             HEATMAP_STYLE_PARAMETER_SPECS,
             ANNOTATION_STYLE_PARAMETER_SPECS,
         ),

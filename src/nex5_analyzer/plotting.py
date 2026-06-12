@@ -146,7 +146,8 @@ def _render_line(axis, result: AnalysisResult) -> None:
         if has_confidence_band:
             valid_band = frame["ci_low"].notna() & frame["ci_high"].notna()
             if valid_band.any():
-                mean_frame = frame[frame["series"] == "Mean"].sort_values("x")
+                mean_label = mean_series.label
+                mean_frame = frame[frame["series"] == mean_label].sort_values("x")
                 if not mean_frame.empty:
                     axis.fill_between(
                         mean_frame["x"].to_numpy(dtype=float),
@@ -175,7 +176,7 @@ def _render_line(axis, result: AnalysisResult) -> None:
             mean_series.y,
             color="#2F6B99",
             linewidth=line_width,
-            label="Mean" if show_legend else None,
+            label=mean_series.label if show_legend else None,
         )
 
         if show_legend:
@@ -485,7 +486,7 @@ def _render_phase_raster(axis, result: AnalysisResult) -> None:
     show_wave_overlay = bool(result.meta.get("show_wave_overlay", True))
     wave_overlay_alpha = float(result.meta.get("wave_overlay_alpha", 0.85))
 
-    for unit_order, unit_label in zip(units["unit_order"], units["unit_label"], strict=False):
+    for unit_order in units["unit_order"]:
         subset = frame[frame["unit_order"] == unit_order]
         axis.hlines(
             np.full(len(subset), float(unit_order), dtype=float),
@@ -693,7 +694,19 @@ def _annotate_meta(axis, result: AnalysisResult) -> None:
         return
     keys = [
         key
-        for key in ("width_ms", "snr", "plv", "mean_phase_rad", "peak_phase_hz", "peak_amp_hz", "peak_mi")
+        for key in (
+            "width_ms",
+            "snr",
+            "plv",
+            "ppc",
+            "kappa",
+            "rayleigh_p",
+            "spike_count",
+            "mean_phase_rad",
+            "peak_phase_hz",
+            "peak_amp_hz",
+            "peak_mi",
+        )
         if key in result.meta
     ]
     if not keys:
@@ -701,15 +714,27 @@ def _annotate_meta(axis, result: AnalysisResult) -> None:
     lines = []
     for key in keys:
         value = result.meta[key]
-        if isinstance(value, float):
+        if key == "rayleigh_p":
+            lines.append(f"{key}: {float(value):.3g}")
+        elif key == "spike_count":
+            lines.append(f"{key}: {int(value)}")
+        elif isinstance(value, float):
             lines.append(f"{key}: {value:.3f}")
         else:
             lines.append(f"{key}: {value}")
+    if bool(result.meta.get("low_spike_warning")):
+        lines.append("⚠ low spike count")
+    # Adaptive font size to prevent overflow when many metrics are present
+    num_lines = len(lines)
+    if result.kind == "polar":
+        fontsize = 7.5 if num_lines > 5 else (8.0 if num_lines > 3 else 9.0)
+    else:
+        fontsize = 7.5 if num_lines > 6 else 8.5
     annotation = "\n".join(lines)
     if result.kind == "polar" or len(_content_axes(axis.figure)) <= 1:
-        artist = axis.set_title(annotation, loc="right", fontsize=9, pad=10)
+        artist = axis.set_title(annotation, loc="right", fontsize=fontsize, pad=8)
         artist.set_multialignment("left")
-        artist.set_bbox({"boxstyle": "round", "facecolor": "white", "alpha": 0.92, "edgecolor": "0.7"})
+        artist.set_bbox({"boxstyle": "round,pad=0.3", "facecolor": "white", "alpha": 0.92, "edgecolor": "0.7"})
     else:
         artist = axis.text(
             0.98,
@@ -718,9 +743,9 @@ def _annotate_meta(axis, result: AnalysisResult) -> None:
             transform=axis.transAxes,
             ha="right",
             va="top",
-            fontsize=8.5,
-            clip_on=False,
-            bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.9, "edgecolor": "0.7"},
+            fontsize=fontsize,
+            clip_on=True,
+            bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "alpha": 0.9, "edgecolor": "0.7"},
         )
     artist.set_gid(METRICS_BOX_GID)
     artist.set_in_layout(True)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import html
 import json
 from pathlib import Path
 
@@ -35,7 +36,7 @@ from .analysis_dialog import AnalysisWorkspaceDialog
 from .grouped_plv_dialog import GroupedPLVWorkspaceDialog
 from .region_mapping_dialog import ChannelRegionMappingDialog, validate_region_map
 from .theme import ensure_app_theme, set_status_tone
-from .workers import TaskWorker
+from .workers import CancellationToken, TaskWorker
 
 
 class MainWindow(QMainWindow):
@@ -210,27 +211,49 @@ class MainWindow(QMainWindow):
         batch_layout.addWidget(QLabel("当前配置"), 2, 0)
         batch_layout.addWidget(self.batch_config_edit, 2, 1, 1, 2)
 
+        self.filename_template_edit = QLineEdit(
+            self.profile.export_defaults.get("filename_template", "")
+        )
+        self.filename_template_edit.setPlaceholderText(
+            "可用变量: {file} {analysis} {source} {date} {time} {subject} {node}"
+        )
+        self.filename_template_edit.setToolTip(
+            "自定义导出文件名模板。留空则使用默认命名。\n"
+            "可用变量: {file}=文件名, {analysis}=分析类型, {source}=通道/单元, "
+            "{date}=日期, {time}=时间, {subject}=被试, {node}=节点名"
+        )
+        batch_layout.addWidget(QLabel("命名模板"), 3, 0)
+        batch_layout.addWidget(self.filename_template_edit, 3, 1, 1, 2)
+
         batch_selection_group = QGroupBox("批量分析项")
         batch_selection_layout = QGridLayout(batch_selection_group)
         batch_selection_layout.setHorizontalSpacing(10)
         batch_selection_layout.setVerticalSpacing(10)
         self._build_batch_analysis_picker(batch_selection_layout)
-        batch_layout.addWidget(batch_selection_group, 3, 0, 1, 3)
+        batch_layout.addWidget(batch_selection_group, 4, 0, 1, 3)
 
         self.batch_progress_bar = QProgressBar()
         self.batch_progress_bar.setRange(0, 100)
         self.batch_progress_bar.setValue(0)
-        batch_layout.addWidget(self.batch_progress_bar, 4, 0, 1, 3)
+        batch_layout.addWidget(self.batch_progress_bar, 5, 0, 1, 3)
 
+        batch_buttons_row = QHBoxLayout()
         self.batch_run_button = QPushButton("运行批量分析")
         self.batch_run_button.clicked.connect(self._run_batch_analysis)
-        batch_layout.addWidget(self.batch_run_button, 5, 0, 1, 3)
+        batch_buttons_row.addWidget(self.batch_run_button)
+
+        self.batch_cancel_button = QPushButton("取消")
+        self.batch_cancel_button.setProperty("variant", "secondary")
+        self.batch_cancel_button.clicked.connect(self._cancel_batch_analysis)
+        self.batch_cancel_button.setEnabled(False)
+        batch_buttons_row.addWidget(self.batch_cancel_button)
+        batch_layout.addLayout(batch_buttons_row, 6, 0, 1, 3)
 
         self.batch_status_view = QTextEdit()
         self.batch_status_view.setReadOnly(True)
         self.batch_status_view.setPlaceholderText("批量状态、进度和结果汇总会显示在这里。")
         self.batch_status_view.setMinimumHeight(120)
-        batch_layout.addWidget(self.batch_status_view, 6, 0, 1, 3)
+        batch_layout.addWidget(self.batch_status_view, 7, 0, 1, 3)
 
         self._update_batch_profile_display()
         self._apply_batch_defaults_from_profile()
@@ -273,9 +296,6 @@ class MainWindow(QMainWindow):
             self._refresh_mapping_state()
 
     def _save_profile(self) -> None:
-        self.profile.input_defaults["batch_input_dir"] = self.batch_input_edit.text().strip()
-        self.profile.input_defaults["batch_output_dir"] = self.batch_output_edit.text().strip()
-        self.profile.input_defaults["batch_analysis_keys"] = sorted(self._selected_batch_analysis_keys())
         path, _ = QFileDialog.getSaveFileName(
             self,
             "保存配置",
@@ -284,6 +304,11 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        self.profile.input_defaults["batch_input_dir"] = self.batch_input_edit.text().strip()
+        self.profile.input_defaults["batch_output_dir"] = self.batch_output_edit.text().strip()
+        self.profile.input_defaults["batch_analysis_keys"] = sorted(self._selected_batch_analysis_keys())
+        template = self.filename_template_edit.text().strip()
+        self.profile.export_defaults["filename_template"] = template if template else ""
         self.profile.save_json(Path(path))
         self.current_profile_path = Path(path)
         self._persist_profile_state()
@@ -360,7 +385,7 @@ class MainWindow(QMainWindow):
             grouped[key]["unit_count"] += 1
             grouped[key]["sources"].append(unit.variable_name)
         rows = list(grouped.values())
-        rows.sort(key=lambda row: (row["channel_id"] is None, row["channel_id"] or 10**9, row["sources"][0]))
+        rows.sort(key=lambda row: (row["channel_id"] is None, row["channel_id"] if row["channel_id"] is not None else 10**9, row["sources"][0]))
         return rows
 
     def _open_region_mapping_dialog(self) -> None:
@@ -605,6 +630,15 @@ class MainWindow(QMainWindow):
         if not any(input_dir.glob("*.nex5")):
             QMessageBox.warning(self, "批量分析", "输入目录中没有找到 .nex5 文件。")
             return
+        if not output_dir.exists():
+            try:
+                output_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                QMessageBox.warning(self, "批量分析", f"无法创建输出目录：{exc}")
+                return
+        if not output_dir.is_dir():
+            QMessageBox.warning(self, "批量分析", "输出路径不是目录。")
+            return
         if not analysis_keys:
             QMessageBox.warning(self, "批量分析", "请至少选择一个批量分析项。")
             return
@@ -612,7 +646,10 @@ class MainWindow(QMainWindow):
         self.profile.input_defaults["batch_input_dir"] = str(input_dir)
         self.profile.input_defaults["batch_output_dir"] = str(output_dir)
         self.profile.input_defaults["batch_analysis_keys"] = sorted(analysis_keys)
+        template = self.filename_template_edit.text().strip()
+        self.profile.export_defaults["filename_template"] = template if template else ""
         self.batch_run_button.setEnabled(False)
+        self.batch_cancel_button.setEnabled(True)
         self.batch_progress_bar.setValue(0)
         self.batch_status_view.setPlainText("批量分析运行中，请稍候…")
 
@@ -621,6 +658,7 @@ class MainWindow(QMainWindow):
         batch_profile.input_defaults["batch_output_dir"] = str(output_dir)
         batch_profile.input_defaults["batch_analysis_keys"] = sorted(analysis_keys)
 
+        self._batch_cancellation_token = CancellationToken()
         worker = TaskWorker(
             self._execute_batch_run,
             input_dir,
@@ -629,10 +667,12 @@ class MainWindow(QMainWindow):
             profile_snapshot=batch_profile,
             reference_channel_ids=list(self.session.channel_ids),
             inject_progress=True,
+            cancellation_token=self._batch_cancellation_token,
         )
         worker.signals.progress.connect(self._on_batch_progress)
         worker.signals.result.connect(self._on_batch_run_success)
         worker.signals.error.connect(self._on_batch_run_error)
+        worker.signals.cancelled.connect(self._on_batch_cancelled)
         worker.signals.finished.connect(self._on_batch_run_finished)
         self.batch_thread_pool.start(worker)
 
@@ -644,6 +684,7 @@ class MainWindow(QMainWindow):
         profile_snapshot: SessionProfile | None = None,
         reference_channel_ids: list[int] | None = None,
         progress_callback=None,
+        cancellation_token: CancellationToken | None = None,
     ) -> BatchRunReport:
         selected_analysis_keys = set(analysis_keys or self._selected_batch_analysis_keys())
         batch_profile = profile_snapshot.clone() if profile_snapshot is not None else self.profile.clone()
@@ -657,6 +698,7 @@ class MainWindow(QMainWindow):
             analysis_keys=selected_analysis_keys,
             reference_channel_ids=reference_channel_ids,
             progress_callback=progress_callback,
+            cancellation_token=cancellation_token,
         )
 
     def _on_batch_progress(self, update: BatchProgressUpdate) -> None:
@@ -675,21 +717,54 @@ class MainWindow(QMainWindow):
 
     def _on_batch_run_success(self, report: BatchRunReport) -> None:
         self.batch_progress_bar.setValue(100)
-        lines = [
-            "批量分析已完成。",
-            f"成功任务：{report.success_count}",
-            f"失败任务：{report.failure_count}",
-            f"成功汇总：{report.run_summary_path}",
-            f"失败汇总：{report.failures_path}",
-        ]
-        self.batch_status_view.setPlainText("\n".join(lines))
+        self.batch_status_view.setHtml(self._build_batch_summary_html(report))
         self.batch_run_button.setEnabled(True)
+
+    @staticmethod
+    def _build_batch_summary_html(report: BatchRunReport) -> str:
+        """Build a rich HTML summary of batch results with success/failure details."""
+        html_parts = ['<h3>批量分析完成</h3>']
+        html_parts.append(
+            f'<p><b>成功：</b><span style="color:green">{report.success_count}</span>'
+            f' &nbsp; <b>失败：</b><span style="color:{"red" if report.failure_count else "gray"}">'
+            f'{report.failure_count}</span></p>'
+        )
+        if report.failures:
+            html_parts.append('<h4 style="color:#c44e52">失败详情：</h4><table border="0" cellpadding="3">')
+            html_parts.append('<tr><th align="left">文件</th><th align="left">分析</th><th align="left">原因</th></tr>')
+            for failure in report.failures[:30]:
+                file_name = failure.session_file.name or "-"
+                analysis = failure.analysis_key or "(加载)"
+                error_msg = failure.error_message or ""
+                # Truncate error message for display
+                error = error_msg[:80] + ("…" if len(error_msg) > 80 else "")
+                html_parts.append(
+                    f'<tr><td>{html.escape(file_name)}</td><td>{html.escape(analysis)}</td>'
+                    f'<td style="color:#c44e52">{html.escape(error)}</td></tr>'
+                )
+            if len(report.failures) > 30:
+                html_parts.append(f'<tr><td colspan="3">… 还有 {len(report.failures) - 30} 条失败记录</td></tr>')
+            html_parts.append('</table>')
+        html_parts.append(f'<p style="color:gray; font-size:small">汇总：{report.run_summary_path}<br/>'
+                          f'失败记录：{report.failures_path}</p>')
+        return "".join(html_parts)
 
     def _on_batch_run_error(self, message: str) -> None:
         self.batch_status_view.setPlainText(f"批量分析失败：{message}")
         QMessageBox.critical(self, "批量分析失败", message)
 
+    def _cancel_batch_analysis(self) -> None:
+        if hasattr(self, "_batch_cancellation_token"):
+            self._batch_cancellation_token.cancel()
+        self.batch_cancel_button.setEnabled(False)
+        self.batch_status_view.append("正在取消…")
+
+    def _on_batch_cancelled(self) -> None:
+        self.batch_status_view.setPlainText("批量分析已被用户取消。")
+        self.batch_progress_bar.setValue(0)
+
     def _on_batch_run_finished(self) -> None:
+        self.batch_cancel_button.setEnabled(False)
         self._refresh_batch_run_enabled()
 
     @staticmethod

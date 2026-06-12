@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QThreadPool, Qt
+from PySide6.QtCore import QEvent, QThreadPool, QTimer, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -27,13 +27,14 @@ from ..analysis.service import AnalysisService
 from ..analysis.tree import AnalysisTreeBuilder
 from ..analysis.validation import validate_analysis_request
 from ..config import SessionProfile
+from ..error_messages import friendly_error_message
 from ..export_naming import build_analysis_output_stem, slugify_export_token
 from ..exporters import export_result_data, export_result_figure
 from ..models import AnalysisNode, AnalysisResult, SessionData
 from .parameter_panel import ParameterPanel
 from .preview import PreviewWidget
 from .theme import ensure_app_theme, set_status_tone
-from .workers import AnalysisWorker, TaskWorker
+from .workers import AnalysisWorker, CancellationToken, TaskWorker
 
 
 @dataclass(slots=True)
@@ -158,6 +159,12 @@ class AnalysisWorkspaceDialog(QDialog):
         parameter_layout.addWidget(self.parameter_panel)
         splitter.addWidget(parameter_group)
 
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.setInterval(400)
+        self._debounce_timer.timeout.connect(self._on_debounce_recompute)
+        self.parameter_panel.values_changed.connect(self._on_param_changed)
+
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 5)
         splitter.setStretchFactor(2, 3)
@@ -182,13 +189,11 @@ class AnalysisWorkspaceDialog(QDialog):
         self.export_current_figure_button.setProperty("variant", "secondary")
         self.export_current_figure_button.clicked.connect(self._on_export_figure)
         buttons.addWidget(self.export_current_figure_button)
-        self.export_image_button = self.export_current_figure_button
 
         self.export_current_data_button = QPushButton("导出当前数据")
         self.export_current_data_button.setProperty("variant", "secondary")
         self.export_current_data_button.clicked.connect(self._on_export_data)
         buttons.addWidget(self.export_current_data_button)
-        self.export_data_button = self.export_current_data_button
 
         self.export_all_figures_button = QPushButton("导出全部图形")
         self.export_all_figures_button.setProperty("variant", "secondary")
@@ -199,6 +204,12 @@ class AnalysisWorkspaceDialog(QDialog):
         self.export_all_data_button.setProperty("variant", "secondary")
         self.export_all_data_button.clicked.connect(self._on_export_all_data)
         buttons.addWidget(self.export_all_data_button)
+
+        self.cancel_export_button = QPushButton("取消导出")
+        self.cancel_export_button.setProperty("variant", "secondary")
+        self.cancel_export_button.clicked.connect(self._cancel_export)
+        self.cancel_export_button.setEnabled(False)
+        buttons.addWidget(self.cancel_export_button)
 
         self.export_progress_bar = QProgressBar()
         self.export_progress_bar.setRange(0, 100)
@@ -280,6 +291,15 @@ class AnalysisWorkspaceDialog(QDialog):
         set_status_tone(self.analysis_type_label, "info")
         set_status_tone(self.node_status_label, "info")
 
+    def _on_param_changed(self) -> None:
+        self._debounce_timer.start()
+
+    def _on_debounce_recompute(self) -> None:
+        if not self.current_node or not self.current_node.analysis_key:
+            return
+        params = self.parameter_panel.values()
+        self._compute_current_node(params, show_validation_dialog=False)
+
     def _on_apply_clicked(self) -> None:
         if not self.current_node or not self.current_node.analysis_key:
             return
@@ -309,7 +329,7 @@ class AnalysisWorkspaceDialog(QDialog):
                 validate_analysis_request(self.session, self.current_node, params)
             except ValueError as exc:
                 self.current_result = None
-                self._set_export_enabled(False)
+                self._refresh_export_buttons()
                 self.preview.show_message(str(exc), title="结果预览")
                 self.compute_status_label.setText("状态：参数无效")
                 set_status_tone(self.compute_status_label, "error")
@@ -321,7 +341,7 @@ class AnalysisWorkspaceDialog(QDialog):
         request_id = self._latest_request_id
         self.thread_pool.clear()
         self.current_result = None
-        self._set_export_enabled(False)
+        self._refresh_export_buttons()
         self.preview.show_message("正在计算，请稍候…", title="正在更新结果")
         self.compute_status_label.setText("状态：正在计算")
         set_status_tone(self.compute_status_label, "warn")
@@ -335,7 +355,7 @@ class AnalysisWorkspaceDialog(QDialog):
         if request_id != self._latest_request_id:
             return
         self.current_result = result
-        self._set_export_enabled(True)
+        self._refresh_export_buttons()
         self.preview.render(result)
         self.compute_status_label.setText("状态：结果已更新")
         set_status_tone(self.compute_status_label, "ok")
@@ -344,11 +364,12 @@ class AnalysisWorkspaceDialog(QDialog):
         if request_id != self._latest_request_id:
             return
         self.current_result = None
-        self._set_export_enabled(False)
-        self.preview.show_message(message, title="计算失败")
+        self._refresh_export_buttons()
+        user_message = friendly_error_message(message)
+        self.preview.show_message(user_message, title="计算失败")
         self.compute_status_label.setText("状态：计算失败")
         set_status_tone(self.compute_status_label, "error")
-        QMessageBox.critical(self, "分析失败", message)
+        QMessageBox.warning(self, "分析失败", user_message)
 
     def _on_export_figure(self) -> None:
         if self.current_result is None:
@@ -388,86 +409,9 @@ class AnalysisWorkspaceDialog(QDialog):
             return
         self._start_export_all(Path(output_dir), export_figures=False, export_data=True)
 
-    def _start_export_all(self, output_dir: Path, export_figures: bool, export_data: bool) -> None:
-        if not self._has_exportable_nodes():
-            QMessageBox.information(self, "导出结果", "当前工作台没有可导出的分析节点。")
-            return
-        self._export_busy = True
-        self._refresh_export_buttons()
-        scope_label = self._export_scope_label(export_figures, export_data)
-        self.compute_status_label.setText(f"状态: 正在导出全部{scope_label}")
-        set_status_tone(self.compute_status_label, "warn")
-
-        worker = TaskWorker(
-            self._execute_export_all,
-            output_dir,
-            export_figures=export_figures,
-            export_data=export_data,
-            profile_snapshot=self.profile.clone(),
-        )
-        worker.signals.result.connect(
-            lambda report, figures=export_figures, data=export_data: self._on_export_all_success(report, figures, data)
-        )
-        worker.signals.error.connect(self._on_export_all_error)
-        worker.signals.finished.connect(self._on_export_all_finished)
-        self.export_thread_pool.start(worker)
-
-    def _execute_export_all(
-        self,
-        output_dir: Path,
-        export_figures: bool = True,
-        export_data: bool = True,
-        profile_snapshot: SessionProfile | None = None,
-    ) -> ExportAllOutcome:
-        export_profile = profile_snapshot.clone() if profile_snapshot is not None else self.profile.clone()
-        export_service = self.service.clone()
-        runner = BatchAnalysisRunner(service=export_service)
-        report = runner.export_session(
-            self.session,
-            output_dir,
-            export_profile,
-            export_figures=export_figures,
-            export_data=export_data,
-        )
-        return ExportAllOutcome(report=report, service=export_service)
-
-    def _on_export_all_success(self, outcome: ExportAllOutcome, export_figures: bool, export_data: bool) -> None:
-        self.service.merge_cache(outcome.service)
-        report = outcome.report
-        scope_label = self._export_scope_label(export_figures, export_data)
-        if report.failure_count == 0:
-            self.compute_status_label.setText(f"状态: 已导出全部{scope_label}")
-            set_status_tone(self.compute_status_label, "ok")
-            dialog = QMessageBox.information
-        else:
-            self.compute_status_label.setText(f"状态: 全部{scope_label}导出完成，部分失败")
-            set_status_tone(self.compute_status_label, "warn")
-            dialog = QMessageBox.warning
-
-        dialog(
-            self,
-            f"导出全部{scope_label}",
-            "\n".join(
-                [
-                    f"已完成全部{scope_label}导出。",
-                    f"成功任务: {report.success_count}",
-                    f"失败任务: {report.failure_count}",
-                    f"汇总清单: {report.run_summary_path}",
-                    f"失败清单: {report.failures_path}",
-                ]
-            ),
-        )
-
-    def _on_export_all_error(self, message: str) -> None:
-        self.compute_status_label.setText("状态: 全量导出失败")
-        set_status_tone(self.compute_status_label, "error")
-        QMessageBox.critical(self, "导出失败", message)
-
     def _on_export_all_finished(self) -> None:
         self._export_busy = False
-        self._refresh_export_buttons()
-
-    def _set_export_enabled(self, enabled: bool) -> None:
+        self.cancel_export_button.setEnabled(False)
         self._refresh_export_buttons()
 
     def _refresh_export_buttons(self) -> None:
@@ -507,9 +451,6 @@ class AnalysisWorkspaceDialog(QDialog):
         return "png"
 
     def _preferred_data_format(self) -> str:
-        normalized = str(self.profile.export_defaults.get("data_format", "csv")).lower().lstrip(".")
-        if normalized == "csv":
-            return normalized
         return "csv"
 
     def _figure_dialog_filter(self) -> str:
@@ -537,16 +478,18 @@ class AnalysisWorkspaceDialog(QDialog):
 
     def _start_export_all(self, output_dir: Path, export_figures: bool, export_data: bool) -> None:
         if not self._has_exportable_nodes():
-            QMessageBox.information(self, "Export Results", "No exportable analysis nodes are available.")
+            QMessageBox.information(self, "导出结果", "当前工作台没有可导出的分析节点。")
             return
         self._export_busy = True
         self._refresh_export_buttons()
+        self.cancel_export_button.setEnabled(True)
         scope_label = self._export_scope_label(export_figures, export_data)
         self.export_progress_bar.setValue(0)
-        self.export_status_view.setPlainText(f"Preparing export for {scope_label}...")
-        self.compute_status_label.setText(f"Status: exporting all {scope_label}")
+        self.export_status_view.setPlainText(f"正在准备导出{scope_label}…")
+        self.compute_status_label.setText(f"状态：正在导出全部{scope_label}")
         set_status_tone(self.compute_status_label, "warn")
 
+        self._export_cancellation_token = CancellationToken()
         worker = TaskWorker(
             self._execute_export_all,
             output_dir,
@@ -554,12 +497,14 @@ class AnalysisWorkspaceDialog(QDialog):
             export_data=export_data,
             profile_snapshot=self.profile.clone(),
             inject_progress=True,
+            cancellation_token=self._export_cancellation_token,
         )
         worker.signals.progress.connect(self._on_export_all_progress)
         worker.signals.result.connect(
             lambda report, figures=export_figures, data=export_data: self._on_export_all_success(report, figures, data)
         )
         worker.signals.error.connect(self._on_export_all_error)
+        worker.signals.cancelled.connect(self._on_export_cancelled)
         worker.signals.finished.connect(self._on_export_all_finished)
         self.export_thread_pool.start(worker)
 
@@ -570,6 +515,7 @@ class AnalysisWorkspaceDialog(QDialog):
         export_data: bool = True,
         profile_snapshot: SessionProfile | None = None,
         progress_callback=None,
+        cancellation_token: CancellationToken | None = None,
     ) -> ExportAllOutcome:
         export_profile = profile_snapshot.clone() if profile_snapshot is not None else self.profile.clone()
         export_service = self.service.clone()
@@ -581,27 +527,28 @@ class AnalysisWorkspaceDialog(QDialog):
             export_figures=export_figures,
             export_data=export_data,
             progress_callback=progress_callback,
+            cancellation_token=cancellation_token,
         )
         return ExportAllOutcome(report=report, service=export_service)
 
     def _on_export_all_progress(self, update: BatchProgressUpdate) -> None:
         self.export_progress_bar.setValue(update.progress_percent)
         lines = [
-            f"Phase: {self._export_phase_label(update.phase)}",
-            f"Progress: {update.completed_tasks} / {update.total_tasks}" if update.total_tasks else "Progress: preparing",
-            f"Successes: {update.success_count}",
-            f"Failures: {update.failure_count}",
+            f"阶段：{self._export_phase_label(update.phase)}",
+            f"进度：{update.completed_tasks} / {update.total_tasks}" if update.total_tasks else "进度：准备中",
+            f"成功任务：{update.success_count}",
+            f"失败任务：{update.failure_count}",
         ]
         if update.total_chunks:
-            lines.append(f"Batch: {min(update.completed_chunks + 1, update.total_chunks)} / {update.total_chunks}")
+            lines.append(f"批次：{min(update.completed_chunks + 1, update.total_chunks)} / {update.total_chunks}")
         if update.current_file is not None:
-            lines.append(f"File: {update.current_file.name}")
+            lines.append(f"当前文件：{update.current_file.name}")
         if update.current_task:
-            lines.append(f"Current task: {update.current_task}")
+            lines.append(f"当前任务：{update.current_task}")
         if update.eta_seconds is not None:
-            lines.append(f"ETA: {self._format_duration(update.eta_seconds)}")
+            lines.append(f"预计剩余：{self._format_duration(update.eta_seconds)}")
         if update.message:
-            lines.append(f"Details: {update.message}")
+            lines.append(f"详情：{update.message}")
         self.export_status_view.setPlainText("\n".join(lines))
 
     def _on_export_all_success(self, outcome: ExportAllOutcome, export_figures: bool, export_data: bool) -> None:
@@ -611,49 +558,61 @@ class AnalysisWorkspaceDialog(QDialog):
         self.export_status_view.setPlainText(
             "\n".join(
                 [
-                    f"Finished exporting {scope_label}.",
-                    f"Successes: {report.success_count}",
-                    f"Failures: {report.failure_count}",
-                    f"Summary: {report.run_summary_path}",
-                    f"Failures file: {report.failures_path}",
+                    f"已完成全部{scope_label}导出。",
+                    f"成功任务：{report.success_count}",
+                    f"失败任务：{report.failure_count}",
+                    f"汇总清单：{report.run_summary_path}",
+                    f"失败清单：{report.failures_path}",
                 ]
             )
         )
         if report.failure_count == 0:
-            self.compute_status_label.setText(f"Status: finished exporting {scope_label}")
+            self.compute_status_label.setText(f"状态：已导出全部{scope_label}")
             set_status_tone(self.compute_status_label, "ok")
             dialog = QMessageBox.information
         else:
-            self.compute_status_label.setText(f"Status: exporting {scope_label} finished with failures")
+            self.compute_status_label.setText(f"状态：全部{scope_label}导出完成，部分失败")
             set_status_tone(self.compute_status_label, "warn")
             dialog = QMessageBox.warning
 
         dialog(
             self,
-            f"Export {scope_label}",
+            f"导出全部{scope_label}",
             "\n".join(
                 [
-                    f"Finished exporting {scope_label}.",
-                    f"Successes: {report.success_count}",
-                    f"Failures: {report.failure_count}",
-                    f"Summary: {report.run_summary_path}",
-                    f"Failures file: {report.failures_path}",
+                    f"已完成全部{scope_label}导出。",
+                    f"成功任务：{report.success_count}",
+                    f"失败任务：{report.failure_count}",
+                    f"汇总清单：{report.run_summary_path}",
+                    f"失败清单：{report.failures_path}",
                 ]
             ),
         )
 
     def _on_export_all_error(self, message: str) -> None:
-        self.export_status_view.setPlainText(f"Export failed: {message}")
-        self.compute_status_label.setText("Status: export failed")
+        self.export_status_view.setPlainText(f"导出失败：{message}")
+        self.compute_status_label.setText("状态：全量导出失败")
         set_status_tone(self.compute_status_label, "error")
-        QMessageBox.critical(self, "Export Failed", message)
+        QMessageBox.critical(self, "导出失败", message)
+
+    def _cancel_export(self) -> None:
+        if hasattr(self, "_export_cancellation_token"):
+            self._export_cancellation_token.cancel()
+        self.cancel_export_button.setEnabled(False)
+        self.export_status_view.append("正在取消…")
+
+    def _on_export_cancelled(self) -> None:
+        self.export_status_view.setPlainText("导出已被用户取消。")
+        self.export_progress_bar.setValue(0)
+        self.compute_status_label.setText("状态：导出已取消")
+        set_status_tone(self.compute_status_label, "info")
 
     @staticmethod
     def _export_phase_label(phase: str) -> str:
         labels = {
-            "starting": "preparing",
-            "processing": "processing",
-            "finished": "finished",
+            "starting": "准备中",
+            "processing": "处理中",
+            "finished": "已完成",
         }
         return labels.get(phase, phase)
 

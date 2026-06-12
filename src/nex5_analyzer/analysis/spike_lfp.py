@@ -6,13 +6,18 @@ import pandas as pd
 import quantities as pq
 from elephant.conversion import BinnedSpikeTrain
 from elephant.phase_analysis import mean_phase_vector, spike_triggered_phase
-from elephant.sta import spike_field_coherence
+from elephant.sta import spike_field_coherence, spike_triggered_average
 from scipy import signal
-from scipy.stats import chi2
 
 from ..models import AnalysisNode, AnalysisResult, PlotSeries
 from .common import bandpass
 from .runtime import AnalysisRuntime
+
+# Below this spike count the resultant-vector phase-locking estimates (PLV,
+# Rayleigh statistic) are strongly biased and should be treated with caution.
+# See Vinck et al. (2010), NeuroImage 51:112 and Zar (1999), Biostatistical
+# Analysis, ch. 27.
+MIN_RELIABLE_PHASE_SPIKES = 50
 
 
 def compute_sta(runtime: AnalysisRuntime, node: AnalysisNode, params: dict) -> AnalysisResult:
@@ -132,9 +137,12 @@ def compute_phase_locking(runtime: AnalysisRuntime, node: AnalysisNode, params: 
         meta={
             "mean_phase_rad": state["mean_angle"],
             "plv": state["plv"],
+            "ppc": state["ppc"],
             "rayleigh_z": state["rayleigh_z"],
             "rayleigh_p": state["rayleigh_p"],
             "kappa": state["kappa"],
+            "spike_count": state["spike_count"],
+            "low_spike_warning": state["low_spike_warning"],
         },
     )
 
@@ -167,9 +175,12 @@ def compute_phase_locking_polar(runtime: AnalysisRuntime, node: AnalysisNode, pa
         meta={
             "mean_phase_rad": state["mean_angle"],
             "plv": state["plv"],
+            "ppc": state["ppc"],
             "rayleigh_z": state["rayleigh_z"],
             "rayleigh_p": state["rayleigh_p"],
             "kappa": state["kappa"],
+            "spike_count": state["spike_count"],
+            "low_spike_warning": state["low_spike_warning"],
         },
     )
 
@@ -213,7 +224,6 @@ def compute_population_coding(runtime: AnalysisRuntime, node: AnalysisNode, para
     analytic = signal.hilbert(filtered)
     wrapped_phase_rad = np.mod(np.angle(analytic), 2.0 * np.pi)
     unwrapped_phase_rad = np.unwrap(np.angle(analytic))
-    cycle_indices = np.floor((unwrapped_phase_rad - unwrapped_phase_rad[0]) / (2.0 * np.pi)).astype(int)
     lfp_channel = runtime.session.get_lfp_channel(node.source_refs["lfp"])
 
     candidate_units = list(runtime.session.spike_units)
@@ -318,20 +328,24 @@ def _build_sta_state(runtime: AnalysisRuntime, node: AnalysisNode, params: dict)
     if times.size == 0:
         return {"error_message": "No LFP fragment available."}
 
-    sampling_rate_hz = channel.sampling_rate_hz
-    half_window_samples = int(float(params["window_ms"]) / 1000.0 * sampling_rate_hz)
-    aligned_spikes = spike.timestamps_s[(spike.timestamps_s >= times[0]) & (spike.timestamps_s <= times[-1])]
-    segments = []
-    for spike_time in aligned_spikes:
-        index = int(round((spike_time - times[0]) * sampling_rate_hz))
-        if index - half_window_samples < 0 or index + half_window_samples >= len(values):
-            continue
-        segments.append(values[index - half_window_samples : index + half_window_samples + 1])
-    if not segments:
+    aligned_spikes = _valid_spikes_for_fragment(spike.timestamps_s, times)
+    if aligned_spikes.size == 0:
+        return {"error_message": "No spikes overlap with the selected LFP fragment."}
+
+    analog = _build_analog_signal(np.asarray(values, dtype=float), channel.sampling_rate_hz, float(times[0]))
+    spiketrain = neo.SpikeTrain(np.sort(aligned_spikes) * pq.s, t_start=times[0] * pq.s, t_stop=times[-1] * pq.s)
+    half_window_ms = float(params["window_ms"])
+    result_sta = spike_triggered_average(
+        analog,
+        spiketrain,
+        window=(-half_window_ms * pq.ms, half_window_ms * pq.ms),
+    )
+
+    mean_segment = np.asarray(result_sta.magnitude, dtype=float).squeeze()
+    if mean_segment.size == 0 or not np.any(np.isfinite(mean_segment)):
         return {"error_message": "No spikes fell within the valid STA window for the selected fragment."}
 
-    mean_segment = np.mean(np.vstack(segments), axis=0)
-    lags_ms = np.arange(-half_window_samples, half_window_samples + 1, dtype=float) / sampling_rate_hz * 1000.0
+    lags_ms = np.asarray(result_sta.times.rescale(pq.ms).magnitude, dtype=float)
     return {"lags_ms": lags_ms, "mean_segment": mean_segment}
 
 
@@ -503,16 +517,22 @@ def _build_sfc_significance_state(
             max_freq_hz=float(params["max_freq_hz"]),
         )[1]
 
-    pvalues = (1.0 + np.sum(surrogate_curves >= observed[None, :], axis=0)) / float(surrogate_runs + 1)
+    # Family-wise error control across frequencies via the max-statistic
+    # permutation distribution (Nichols & Holmes 2002, Hum. Brain Mapp. 15:1).
+    # Each surrogate contributes its single largest coherence across the whole
+    # frequency axis; comparing the observed coherence at every frequency
+    # against that null of maxima corrects for testing many frequencies at once.
+    surrogate_max = surrogate_curves.max(axis=1) if surrogate_curves.size else np.zeros(0, dtype=float)
+    pvalues = (1.0 + np.sum(surrogate_max[:, None] >= observed[None, :], axis=0)) / float(surrogate_runs + 1)
     negative_log10_pvalue = -np.log10(np.clip(pvalues, 1e-12, 1.0))
     negative_log10_threshold = np.full_like(negative_log10_pvalue, -np.log10(alpha), dtype=float)
-    peak_index = int(np.argmax(negative_log10_pvalue))
+    peak_index = int(np.argmax(observed)) if observed.size else 0
     return {
         "frequency_hz": freq_hz,
         "negative_log10_pvalue": negative_log10_pvalue,
         "negative_log10_threshold": negative_log10_threshold,
         "coherence": observed,
-        "peak_frequency_hz": float(freq_hz[peak_index]),
+        "peak_frequency_hz": float(freq_hz[peak_index]) if freq_hz.size else float("nan"),
         "alpha": alpha,
     }
 
@@ -569,9 +589,12 @@ def _phase_locking_histogram_state(
         "edges": edges.astype(float),
         "mean_angle": float(state["mean_angle"]),
         "plv": float(state["plv"]),
+        "ppc": float(state["ppc"]),
         "rayleigh_z": float(state["rayleigh_z"]),
         "rayleigh_p": float(state["rayleigh_p"]),
         "kappa": float(state["kappa"]),
+        "spike_count": int(state["spike_count"]),
+        "low_spike_warning": bool(state["low_spike_warning"]),
     }
 
 
@@ -580,26 +603,55 @@ def phase_locking_metrics(phase_values: np.ndarray) -> dict[str, object]:
     if phase_array.size == 0:
         return {"error_message": "No spikes overlap with the selected LFP fragment."}
 
+    sample_count = int(phase_array.size)
     mean_angle, plv = mean_phase_vector(phase_array)
     rayleigh_z, rayleigh_p = _rayleigh_test(phase_array, float(plv))
     return {
         "phase_values": phase_array.astype(float),
         "mean_angle": float(mean_angle),
         "plv": float(plv),
+        "ppc": float(_pairwise_phase_consistency(float(plv), sample_count)),
         "rayleigh_z": float(rayleigh_z),
         "rayleigh_p": float(rayleigh_p),
-        "kappa": float(_estimate_kappa(float(plv), int(phase_array.size))),
-        "spike_count": int(phase_array.size),
+        "kappa": float(_estimate_kappa(float(plv), sample_count)),
+        "spike_count": sample_count,
+        "low_spike_warning": bool(sample_count < MIN_RELIABLE_PHASE_SPIKES),
     }
+
+
+def _pairwise_phase_consistency(plv: float, sample_count: int) -> float:
+    """Unbiased pairwise phase consistency (PPC0, Vinck et al. 2010).
+
+    Unlike the resultant length (PLV), PPC is not biased by the number of
+    spikes, so it is the recommended population/low-count phase-locking metric.
+    """
+    if sample_count < 2:
+        return float("nan")
+    resultant_length = float(plv)
+    return float((sample_count * resultant_length * resultant_length - 1.0) / (sample_count - 1.0))
 
 
 def _rayleigh_test(phase_values: np.ndarray, plv: float) -> tuple[float, float]:
     sample_count = int(np.asarray(phase_values, dtype=float).size)
     if sample_count <= 0:
         return 0.0, 1.0
-    rayleigh_z = sample_count * float(plv) * float(plv)
-    pvalue = float(chi2.sf(2.0 * rayleigh_z, df=2))
-    return rayleigh_z, max(min(pvalue, 1.0), 0.0)
+    resultant_length = float(plv)
+    rayleigh_z = sample_count * resultant_length * resultant_length
+    # Zar (1999, eq. 27.4) / Berens (2009, CircStat `circ_rtest`) small-sample
+    # expansion. The leading exp(-z) term equals the large-sample approximation
+    # used previously; the higher-order terms correct the bias for small n.
+    pvalue = np.exp(-rayleigh_z) * (
+        1.0
+        + (2.0 * rayleigh_z - rayleigh_z**2) / (4.0 * sample_count)
+        - (
+            24.0 * rayleigh_z
+            - 132.0 * rayleigh_z**2
+            + 76.0 * rayleigh_z**3
+            - 9.0 * rayleigh_z**4
+        )
+        / (288.0 * sample_count**2)
+    )
+    return rayleigh_z, float(max(min(pvalue, 1.0), 0.0))
 
 
 def _estimate_kappa(plv: float, sample_count: int) -> float:

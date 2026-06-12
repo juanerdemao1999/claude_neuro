@@ -5,7 +5,7 @@ import pandas as pd
 from scipy import signal
 
 from ..models import AnalysisNode, AnalysisResult, PlotSeries
-from .common import bandpass
+from .common import bandpass, base_spectrogram_kwargs
 from .runtime import AnalysisRuntime
 
 
@@ -14,18 +14,9 @@ SPECTROGRAM_DEFAULT_COLOR_RANGE = (-80.0, -20.0)
 
 
 def _spectrogram_kwargs(sample_rate_hz: float, params: dict) -> dict[str, object]:
-    kwargs: dict[str, object] = {
-        "fs": sample_rate_hz,
-        "nperseg": int(params["nperseg"]),
-        "noverlap": int(params["noverlap"]),
-    }
-    if "window_function" in params:
-        kwargs["window"] = str(params["window_function"])
-    if "detrend_mode" in params:
-        kwargs["detrend"] = False if str(params["detrend_mode"]) == "none" else str(params["detrend_mode"])
-    if "spectrum_scaling" in params:
-        kwargs["scaling"] = str(params["spectrum_scaling"])
-    return kwargs
+    return base_spectrogram_kwargs(
+        sample_rate_hz, int(params["nperseg"]), int(params["noverlap"]), params
+    )
 
 
 def _welch_kwargs(sample_rate_hz: float, params: dict) -> dict[str, object]:
@@ -78,30 +69,6 @@ def _resolve_default_db_range(
     if requested_min <= robust_min and requested_max >= robust_max:
         return requested_range
     return auto_range
-
-
-def compute_fft(runtime: AnalysisRuntime, node: AnalysisNode, params: dict) -> AnalysisResult:
-    channel = runtime.load_channel(node.source_refs["lfp"])
-    _, values = runtime.load_channel_fragment(node.source_refs["lfp"])
-    frequencies = np.fft.rfftfreq(len(values), d=1.0 / channel.sampling_rate_hz)
-    amplitude = np.abs(np.fft.rfft(values - np.nanmean(values)))
-    mask = frequencies <= float(params["max_freq_hz"])
-    frame = pd.DataFrame(
-        {
-            "frequency_hz": frequencies[mask],
-            "power": amplitude[mask],
-            "source_id": node.source_refs["lfp"],
-        }
-    )
-    return AnalysisResult(
-        node_id=node.node_id,
-        title=f"FFT - {node.label}",
-        kind="line",
-        x_label="Frequency (Hz)",
-        y_label="Amplitude",
-        series=[PlotSeries(label=node.label, x=frame["frequency_hz"].to_numpy(), y=frame["power"].to_numpy())],
-        export_table=frame,
-    )
 
 
 def compute_psd(runtime: AnalysisRuntime, node: AnalysisNode, params: dict) -> AnalysisResult:
