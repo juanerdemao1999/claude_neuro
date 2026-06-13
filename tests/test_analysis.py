@@ -1429,3 +1429,136 @@ def test_tree_builder_adds_placeholder_nodes_when_lfp_missing(sample_nex5_path) 
 
     lfp_root = root.find_node("category:lfp")
     assert any(child.kind == "placeholder" for child in lfp_root.children)
+
+
+def test_sta_export_includes_confidence_band_columns() -> None:
+    session = make_synthetic_session()
+    profile = SessionProfile.default()
+    root = AnalysisTreeBuilder().build(session, profile)
+    node = root.find_node("spike_lfp:sta:unit_ch01_u01__ch01")
+
+    result = AnalysisService().compute(session, node, profile, {})
+
+    assert result.kind == "line"
+    assert {"lag_ms", "amplitude", "sem", "ci_low", "ci_high"}.issubset(result.export_table.columns)
+    finite = result.export_table["sem"].to_numpy(dtype=float)
+    assert np.all(finite[np.isfinite(finite)] >= 0.0)
+    assert "SEM" in result.y_label
+
+
+def test_sta_sem_decreases_with_more_spikes() -> None:
+    rng = np.random.default_rng(3)
+    times = np.linspace(0.0, 10.0, 10_000)
+    values = rng.standard_normal(times.size)
+    lags_s = np.linspace(-0.02, 0.02, 41)
+    few = np.linspace(1.0, 2.0, 5)
+    many = np.linspace(1.0, 9.0, 400)
+
+    sem_few, used_few = spike_lfp_module._sta_sem(values, times, few, lags_s)
+    sem_many, used_many = spike_lfp_module._sta_sem(values, times, many, lags_s)
+
+    assert used_few == 5 and used_many == 400
+    assert np.nanmean(sem_many) < np.nanmean(sem_few)
+
+
+def test_lfp_coherence_resamples_to_common_rate() -> None:
+    values = np.sin(np.linspace(0.0, 20.0, 2000))
+    same = lfp_lfp_module._resample_to_rate(values, 1000.0, 1000.0)
+    halved = lfp_lfp_module._resample_to_rate(values, 1000.0, 500.0)
+
+    assert np.array_equal(same, values)
+    assert abs(halved.size - values.size // 2) <= 2
+
+
+def test_cluster_silhouette_separates_clear_clusters() -> None:
+    features = np.array([[0.0, 0.0], [0.1, 0.1], [5.0, 5.0], [5.1, 4.9]])
+    labels = np.array([0, 0, 1, 1])
+    mixed_labels = np.array([0, 1, 0, 1])
+
+    assert spike_module._cluster_silhouette(features, labels) > 0.8
+    assert spike_module._cluster_silhouette(features, mixed_labels) < spike_module.CLUSTER_SILHOUETTE_THRESHOLD
+
+
+def test_pac_meta_reports_surrogate_significance() -> None:
+    session = _make_pac_synthetic_session()
+    profile = SessionProfile.default()
+    root = AnalysisTreeBuilder().build(session, profile)
+    node = root.find_node("lfp:pac:ch01")
+
+    result = AnalysisService().compute(session, node, profile, {"pac_surrogate_runs": 80})
+
+    assert "peak_mi_z" in result.meta and "peak_mi_p" in result.meta
+    p_value = float(result.meta["peak_mi_p"])
+    assert 0.0 < p_value <= 1.0
+    # p must be quantised to the surrogate count (Monte-Carlo permutation estimate).
+    assert np.isclose(p_value * 81.0, round(p_value * 81.0))
+
+
+def test_pac_bandwidth_meta_warns_when_amplitude_band_too_narrow() -> None:
+    narrow_state = {
+        "peak_indices": (0, 0),
+        "phase_centers": np.array([8.0]),
+        "amp_bandwidth_hz": 4.0,
+    }
+    wide_state = {
+        "peak_indices": (0, 0),
+        "phase_centers": np.array([8.0]),
+        "amp_bandwidth_hz": 30.0,
+    }
+
+    assert "pac_bandwidth_warning" in lfp_module._pac_bandwidth_meta(narrow_state)
+    assert lfp_module._pac_bandwidth_meta(wide_state) == {}
+
+
+def test_phase_locking_histogram_uses_radian_axis_metadata() -> None:
+    session = make_synthetic_session()
+    profile = SessionProfile.default()
+    root = AnalysisTreeBuilder().build(session, profile)
+    node = root.find_node("spike_lfp:phase_locking:unit_ch01_u01__ch01")
+
+    result = AnalysisService().compute(session, node, profile, {})
+    assert result.meta.get("phase_axis") is True
+
+    figure = Figure()
+    axis = figure.add_subplot(111)
+    render_publication_axes(axis, result)
+    tick_labels = [label.get_text() for label in axis.get_xticklabels()]
+    assert tick_labels == ["\u2212\u03c0", "\u2212\u03c0/2", "0", "\u03c0/2", "\u03c0"]
+
+
+def test_sfc_significance_meta_enables_overlay() -> None:
+    session = make_synthetic_session()
+    profile = SessionProfile.default()
+    root = AnalysisTreeBuilder().build(session, profile)
+    node = root.find_node("spike_lfp:sfc_significance:unit_ch01_u01__ch01")
+
+    result = AnalysisService().compute(session, node, profile, {})
+
+    assert result.meta.get("significance_overlay") is True
+    assert np.isfinite(float(result.meta.get("peak_frequency_hz", float("nan"))))
+    figure = Figure()
+    axis = figure.add_subplot(111)
+    render_publication_axes(axis, result)
+
+
+def test_sfc_significance_line_plots_log_p_not_coherence() -> None:
+    # The SFC-significance export table carries both ``coherence`` and
+    # ``negative_log10_pvalue``. The y-axis label, threshold line and
+    # significance shading are all in -log10(p), so the plotted line must use
+    # -log10(p) rather than coherence to stay self-consistent.
+    from nex5_analyzer.plotting import _line_frame_from_result
+
+    session = make_synthetic_session()
+    profile = SessionProfile.default()
+    root = AnalysisTreeBuilder().build(session, profile)
+    node = root.find_node("spike_lfp:sfc_significance:unit_ch01_u01__ch01")
+
+    result = AnalysisService().compute(session, node, profile, {})
+    table = result.export_table
+    assert {"coherence", "negative_log10_pvalue"}.issubset(table.columns)
+
+    frame = _line_frame_from_result(result)
+    np.testing.assert_allclose(
+        frame["y"].to_numpy(dtype=float),
+        table["negative_log10_pvalue"].to_numpy(dtype=float),
+    )

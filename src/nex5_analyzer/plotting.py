@@ -17,6 +17,48 @@ PLOT_STYLE = ["science", "nature", "no-latex"]
 PLOT_CONTEXT = "paper"
 PLOT_PALETTE = "colorblind"
 METRICS_BOX_GID = "analysis-metrics-box"
+
+
+def _format_phase_deg(value: float) -> str:
+    return f"{np.degrees(float(value)) % 360.0:.1f}°"
+
+
+# Publication-quality labels and formatters for the metrics annotation box.
+# Each entry maps an internal meta key to (display label, value formatter).
+# Order here also defines the display order in the annotation box.
+METRIC_DISPLAY: dict[str, tuple[str, "object"]] = {
+    "width_ms": ("Width", lambda v: f"{float(v):.3f} ms"),
+    "snr": ("SNR", lambda v: f"{float(v):.2f}"),
+    "plv": ("PLV", lambda v: f"{float(v):.3f}"),
+    "ppc": ("PPC", lambda v: f"{float(v):.3f}"),
+    "kappa": ("\u03ba", lambda v: f"{float(v):.3f}"),
+    "rayleigh_p": ("Rayleigh p", lambda v: f"{float(v):.3g}"),
+    "spike_count": ("Spikes", lambda v: f"{int(v)}"),
+    "mean_phase_rad": ("Mean phase", _format_phase_deg),
+    "peak_phase_hz": ("Phase f", lambda v: f"{float(v):.2f} Hz"),
+    "peak_amp_hz": ("Amp f", lambda v: f"{float(v):.2f} Hz"),
+    "peak_mi": ("Peak MI", lambda v: f"{float(v):.4f}"),
+    "peak_mi_z": ("MI z", lambda v: f"{float(v):.2f}"),
+    "peak_mi_p": ("MI p", lambda v: f"{float(v):.3g}"),
+}
+
+
+def _format_metric_line(key: str, value: object) -> str | None:
+    label, formatter = METRIC_DISPLAY.get(key, (key, None))
+    try:
+        if formatter is None:
+            text = f"{float(value):.3f}" if isinstance(value, float) else str(value)
+        else:
+            numeric = float(value)
+            if not np.isfinite(numeric) and key not in {"spike_count"}:
+                text = "n/a"
+            else:
+                text = formatter(value)
+    except (TypeError, ValueError):
+        return None
+    return f"{label}: {text}"
+
+
 PLOT_FONT_FAMILIES = [
     "Microsoft YaHei",
     "SimHei",
@@ -102,6 +144,7 @@ def _render_axis_content(axis, result: AnalysisResult) -> None:
         axis.set_ylabel(result.y_label)
     _apply_axis_ranges(axis, result)
     _render_reference_hlines(axis, result)
+    _render_significance_overlay(axis, result)
     _annotate_meta(axis, result)
     _apply_axis_spacing(axis, result)
     if result.kind not in {"polar", "scatter3d"}:
@@ -287,6 +330,20 @@ def _render_scatter3d(axis, result: AnalysisResult) -> None:
             alpha=0.98,
         )
 
+    separability_warning = result.meta.get("cluster_separability_warning")
+    if isinstance(separability_warning, str) and separability_warning:
+        axis.text2D(
+            0.02,
+            0.98,
+            separability_warning,
+            transform=axis.transAxes,
+            ha="left",
+            va="top",
+            fontsize=7.5,
+            color="#C44E52",
+            wrap=True,
+        )
+
     if show_legend:
         _place_legend_outside(axis, max_columns=2)
     elif axis.get_legend() is not None:
@@ -309,6 +366,16 @@ def _render_hist(axis, result: AnalysisResult) -> None:
         linewidth=float(result.meta.get("line_width", 2.2)),
         ax=axis,
     )
+    if bool(result.meta.get("phase_axis")):
+        _apply_phase_axis_ticks(axis)
+
+
+def _apply_phase_axis_ticks(axis) -> None:
+    ticks = [-np.pi, -np.pi / 2.0, 0.0, np.pi / 2.0, np.pi]
+    labels = ["\u2212\u03c0", "\u2212\u03c0/2", "0", "\u03c0/2", "\u03c0"]
+    axis.set_xticks(ticks)
+    axis.set_xticklabels(labels)
+    axis.set_xlim(-np.pi, np.pi)
 
 
 def _render_polar(axis, result: AnalysisResult) -> None:
@@ -439,7 +506,7 @@ def _polar_tick_labels(tick_values_deg: np.ndarray, label_mode: str) -> list[str
             0: "0",
             90: "π/2",
             180: "π",
-            270: "3/2π",
+            270: "3π/2",
             360: "2π",
         }
         return [mapping.get(int(value), f"{int(value)}°") for value in tick_values_deg]
@@ -498,26 +565,39 @@ def _render_phase_raster(axis, result: AnalysisResult) -> None:
         )
 
     displayed_cycles = int(result.meta.get("displayed_cycles", int(frame["cycle_index"].max()) + 1))
+    # Alternating faint background shading separates successive theta cycles
+    # without the heavy vertical rules used previously.
+    for cycle_index in range(displayed_cycles):
+        if cycle_index % 2 == 1:
+            axis.axvspan(cycle_index * 360.0, (cycle_index + 1) * 360.0, color="#2F6B99", alpha=0.05, linewidth=0.0)
     for boundary_deg in np.arange(0.0, displayed_cycles * 360.0 + 0.5, 360.0):
-        axis.axvline(boundary_deg, color="#2F6B99", linewidth=1.0, alpha=cycle_line_alpha)
+        axis.axvline(boundary_deg, color="#9DB9CC", linewidth=0.8, linestyle=":", alpha=cycle_line_alpha)
 
     max_x_deg = float(frame["x_deg"].max())
     wave_center = float(units["unit_order"].max()) + 0.9
     if show_wave_overlay:
+        # Cosine reference so peaks line up with the 0°/360° cycle boundaries.
         wave_x_deg = np.linspace(0.0, max_x_deg, num=max(400, displayed_cycles * 80))
         axis.plot(
             wave_x_deg,
-            wave_center + 0.35 * np.sin(np.deg2rad(wave_x_deg)),
+            wave_center + 0.35 * np.cos(np.deg2rad(wave_x_deg)),
             color="#8FB3C9",
             linewidth=max(1.0, line_width * 0.82),
             alpha=wave_overlay_alpha,
         )
-        if displayed_cycles >= 1:
-            axis.text(180.0, wave_center + 0.55, "180 deg", ha="center", va="bottom", fontsize=9)
-            axis.text(360.0, wave_center + 0.72, "360 deg", ha="center", va="bottom", fontsize=9)
+        axis.text(
+            -8.0,
+            wave_center,
+            "LFP phase",
+            ha="right",
+            va="center",
+            fontsize=7.5,
+            color="#5C7C92",
+        )
 
     axis.set_xlim(-12.0, max_x_deg + 12.0)
     axis.set_ylim(-0.7, wave_center + 0.95)
+    axis.set_xticks(np.arange(0.0, displayed_cycles * 360.0 + 0.5, 180.0))
     axis.set_yticks(units["unit_order"].to_numpy(dtype=float))
     axis.set_yticklabels(units["unit_label"].tolist())
 
@@ -621,10 +701,9 @@ def _line_frame_from_result(result: AnalysisResult) -> pd.DataFrame:
         )
     if {"frequency_hz", "power"}.issubset(result.export_table.columns):
         return pd.DataFrame({"x": result.export_table["frequency_hz"], "y": result.export_table["power"], "series": "Signal"})
-    if {"frequency_hz", "coherence"}.issubset(result.export_table.columns):
-        return pd.DataFrame(
-            {"x": result.export_table["frequency_hz"], "y": result.export_table["coherence"], "series": "Signal"}
-        )
+    # Check -log10(p) before coherence: the SFC-significance table carries both
+    # columns, but its axis, threshold line and significance shading are all in
+    # -log10(p), so the line must match that quantity rather than coherence.
     if {"frequency_hz", "negative_log10_pvalue"}.issubset(result.export_table.columns):
         return pd.DataFrame(
             {
@@ -632,6 +711,10 @@ def _line_frame_from_result(result: AnalysisResult) -> pd.DataFrame:
                 "y": result.export_table["negative_log10_pvalue"],
                 "series": "Signal",
             }
+        )
+    if {"frequency_hz", "coherence"}.issubset(result.export_table.columns):
+        return pd.DataFrame(
+            {"x": result.export_table["frequency_hz"], "y": result.export_table["coherence"], "series": "Signal"}
         )
     if {"time_s", "rate_hz"}.issubset(result.export_table.columns):
         return pd.DataFrame({"x": result.export_table["time_s"], "y": result.export_table["rate_hz"], "series": "Signal"})
@@ -642,7 +725,14 @@ def _line_frame_from_result(result: AnalysisResult) -> pd.DataFrame:
     if {"time_ms", "amplitude"}.issubset(result.export_table.columns):
         return pd.DataFrame({"x": result.export_table["time_ms"], "y": result.export_table["amplitude"], "series": "Signal"})
     if {"lag_ms", "amplitude"}.issubset(result.export_table.columns):
-        return pd.DataFrame({"x": result.export_table["lag_ms"], "y": result.export_table["amplitude"], "series": "Signal"})
+        frame = pd.DataFrame(
+            {"x": result.export_table["lag_ms"], "y": result.export_table["amplitude"], "series": "Signal"}
+        )
+        if "ci_low" in result.export_table.columns:
+            frame["ci_low"] = result.export_table["ci_low"]
+        if "ci_high" in result.export_table.columns:
+            frame["ci_high"] = result.export_table["ci_high"]
+        return frame
     return pd.DataFrame(columns=["x", "y", "series"])
 
 
@@ -692,38 +782,20 @@ def _hist_frame_from_result(result: AnalysisResult) -> pd.DataFrame:
 def _annotate_meta(axis, result: AnalysisResult) -> None:
     if result.meta.get("show_metrics_box") is False:
         return
-    keys = [
-        key
-        for key in (
-            "width_ms",
-            "snr",
-            "plv",
-            "ppc",
-            "kappa",
-            "rayleigh_p",
-            "spike_count",
-            "mean_phase_rad",
-            "peak_phase_hz",
-            "peak_amp_hz",
-            "peak_mi",
-        )
-        if key in result.meta
-    ]
-    if not keys:
-        return
     lines = []
-    for key in keys:
-        value = result.meta[key]
-        if key == "rayleigh_p":
-            lines.append(f"{key}: {float(value):.3g}")
-        elif key == "spike_count":
-            lines.append(f"{key}: {int(value)}")
-        elif isinstance(value, float):
-            lines.append(f"{key}: {value:.3f}")
-        else:
-            lines.append(f"{key}: {value}")
+    for key in METRIC_DISPLAY:
+        if key not in result.meta:
+            continue
+        line = _format_metric_line(key, result.meta[key])
+        if line is not None:
+            lines.append(line)
+    if not lines:
+        return
     if bool(result.meta.get("low_spike_warning")):
-        lines.append("⚠ low spike count")
+        lines.append("Low spike count (n<50)")
+    bandwidth_warning = result.meta.get("pac_bandwidth_warning")
+    if isinstance(bandwidth_warning, str) and bandwidth_warning:
+        lines.append(bandwidth_warning)
     # Adaptive font size to prevent overflow when many metrics are present
     num_lines = len(lines)
     if result.kind == "polar":
@@ -759,7 +831,52 @@ def _render_reference_hlines(axis, result: AnalysisResult) -> None:
             linestyle=str(line.get("linestyle", "--")),
             linewidth=float(line.get("linewidth", 1.2)),
             alpha=float(line.get("alpha", 0.85)),
+            label=line.get("label"),
         )
+
+
+def _render_significance_overlay(axis, result: AnalysisResult) -> None:
+    if not result.meta.get("significance_overlay"):
+        return
+    table = result.export_table
+    required = {"frequency_hz", "negative_log10_pvalue", "negative_log10_threshold"}
+    if not required.issubset(table.columns):
+        return
+    freq = table["frequency_hz"].to_numpy(dtype=float)
+    value = table["negative_log10_pvalue"].to_numpy(dtype=float)
+    threshold = table["negative_log10_threshold"].to_numpy(dtype=float)
+    if freq.size == 0:
+        return
+    significant = value >= threshold
+    if significant.any():
+        axis.fill_between(
+            freq,
+            0.0,
+            value,
+            where=significant,
+            interpolate=False,
+            color="#C44E52",
+            alpha=0.18,
+            linewidth=0.0,
+            label="Significant",
+        )
+    peak_frequency_hz = float(result.meta.get("peak_frequency_hz", float("nan")))
+    if np.isfinite(peak_frequency_hz):
+        axis.axvline(peak_frequency_hz, color="#55A868", linestyle=":", linewidth=1.3)
+        top = float(np.nanmax(value)) if value.size else 0.0
+        axis.annotate(
+            f"peak {peak_frequency_hz:.1f} Hz",
+            xy=(peak_frequency_hz, top),
+            xytext=(4, -2),
+            textcoords="offset points",
+            fontsize=7.5,
+            color="#55A868",
+            ha="left",
+            va="top",
+        )
+    handles, labels = axis.get_legend_handles_labels()
+    if labels and bool(result.meta.get("show_legend", True)):
+        axis.legend(handles, labels, fontsize=7.0, frameon=True, loc="upper right")
 
 
 def _remove_auxiliary_axes(axis) -> None:
